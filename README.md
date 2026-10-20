@@ -17,7 +17,7 @@ GPT Vault gives those conversations a home: bring them together, find the answer
 Your imported conversations, original records, collected images, favorites, and search indexes live in one archive. Make a complete backup, take it to another machine, and pick up where you left off.
 
 - **Easy to back up.** Save a complete snapshot to a folder or download it from the browser. Choose plain SQLite or a compressed `.sqlite.zst` backup.
-- **Easy to move.** Restore the backup and point GPT Vault at the restored file. The packaged app runs without Node.js, Python, a database server, or a search service.
+- **Easy to move.** Merge a backup in the browser and read immediately. Matching project names share a group; conversations and messages deduplicate by ID. The packaged app runs without Node.js, Python, a database server, or a search service. Reading backups does not require Codex or ChatGPT Desktop.
 - **Your data stays yours.** Conversations stay on your machine. GPT Vault does not upload them, call a model API, or collect telemetry.
 
 Use the app's backup button when it is running: copying only the live `.sqlite` file can miss recent changes in its companion WAL file. Backups include everything already collected in the archive; unreadable attachments and conversations you have never imported are outside it.
@@ -113,7 +113,9 @@ In **数据与来源** (Data & sources), save a full backup to a folder or downl
 
 ![Manage Windows and WSL sources, save a compressed archive backup, and restore to a separate file.](docs/images/backup.png)
 
-Restore a `.sqlite` or `.sqlite.zst` backup from the same panel. GPT Vault verifies it and writes a separate archive, then shows the command to launch it. Your current archive is kept intact.
+Import a `.sqlite` or `.sqlite.zst` backup from the same panel. The default **合并到当前档案** (Merge into current archive) verifies the backup, deduplicates conversations and messages by ID, and groups matching project names. Records refresh immediately, without restarting. Conflicting bodies keep the current version and preserve the backup version in the conversation's raw export. The result shows added records, duplicates, conflicts, and skipped locally deleted conversations. Local sync settings and existing visibility/deletion choices stay in place; favorites are combined. A failed merge rolls back completely.
+
+You can also choose **恢复为独立档案** (Restore as separate archive), which writes a separate database and shows a command to launch it. Your current archive is kept intact.
 
 You can also restore from the command line to a new file:
 

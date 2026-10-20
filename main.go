@@ -218,7 +218,7 @@ func (a *App) get(w http.ResponseWriter, r *http.Request) error {
 }
 func (a *App) post(w http.ResponseWriter, r *http.Request) error {
 	if r.URL.Path == "/api/restore/upload" {
-		return a.startRestore(w, r, "")
+		return a.startRestore(w, r, "", r.URL.Query().Get("mode"))
 	}
 	if r.URL.Path == "/api/import" {
 		return a.upload(w, r)
@@ -239,7 +239,7 @@ func (a *App) post(w http.ResponseWriter, r *http.Request) error {
 		if strings.TrimSpace(str(v["path"])) == "" {
 			return errors.New("请填写备份文件路径")
 		}
-		return a.startRestore(w, r, str(v["path"]))
+		return a.startRestore(w, r, str(v["path"]), str(v["mode"]))
 	case "/api/sync":
 		jsonResponse(w, M{"started": a.Importer.startSync(v["full"] == true, v["automatic"] == true)})
 		return nil

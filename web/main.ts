@@ -441,13 +441,14 @@ async function sourcesDialog(open = true) {
           <div id="backup-progress" class="backup-progress" hidden role="status" aria-live="polite"></div>
         </section>
         <section class="restore-section sources-column" aria-label="恢复完整档案">
-          <h3 class="section-label">${icon('Upload')}恢复完整档案</h3>
+          <h3 class="section-label">${icon('Upload')}导入完整备份</h3>
           <p class="backup-description">支持 .sqlite / .sqlite.zst 完整备份，包含全部项目、对话、附件及隐藏状态。</p>
+          <label class="backup-format">导入方式<select id="restore-mode" aria-label="备份导入方式"><option value="merge">合并到当前档案（推荐）</option><option value="separate">恢复为独立档案</option></select></label>
+          <p id="restore-mode-description" class="backup-description"></p>
           <label class="field-caption" for="restore-path">备份文件路径</label>
-          <form id="restore-path-form" class="path-form"><input id="restore-path" aria-label="恢复备份路径" placeholder="D:/备份/gpt-vault.sqlite.zst"><button id="restore-path-button" class="button" type="submit">从路径恢复</button></form>
+          <form id="restore-path-form" class="path-form"><input id="restore-path" aria-label="恢复备份路径" placeholder="D:/备份/gpt-vault.sqlite.zst"><button id="restore-path-button" class="button" type="submit">从路径导入</button></form>
           <p class="backup-directory-note">大文件推荐本机路径，无需浏览器上传。</p>
           <div class="restore-upload"><span>也可以上传备份文件</span><label class="button import-label">${icon('Upload')}选择完整备份<input id="restore-file" type="file" accept=".sqlite,.sqlite3,.db,.zst" hidden></label></div>
-          <p class="backup-description">恢复到独立档案，当前文件继续保留。检查通过后，按提示重启服务切换。</p>
           <div id="restore-progress" class="backup-progress" hidden role="status" aria-live="polite"></div>
         </section>
       </div>
@@ -457,8 +458,10 @@ async function sourcesDialog(open = true) {
     input('#import-file').onchange=async()=>{const file=input('#import-file').files?.[0];if(!file)return;try{toast('正在导入 '+file.name);await api('/import',{method:'POST',headers:{'X-Echo-Request':'1','X-Filename':encodeURIComponent(file.name)},body:file});toast('文件已导入，正在收录对话');pollSync();}catch(error){handle(error);}};
     $('#full-sync').onclick=()=>{if(window.confirm('完整重新扫描会重新收录已删除的对话（原始来源仍可读取时）。继续扫描？'))startSync(true);};
     $('#backup-link').onclick=()=>startArchiveBackup('download');
+    $('#restore-mode').onchange=renderRestoreMode;
+    renderRestoreMode();
     $('#restore-path-form').onsubmit=e=>{e.preventDefault();startArchiveRestore();};
-    input('#restore-file').onchange=()=>{const file=input('#restore-file').files?.[0];if(file)startArchiveRestore(file);};
+    input('#restore-file').onchange=()=>{const file=input('#restore-file').files?.[0];input('#restore-file').value='';if(file)startArchiveRestore(file);};
     renderRestore(); pollRestore();
     $('#backup-local').onclick=()=>startArchiveBackup('local');
     $('#backup-directory-form').onsubmit=async e=>{e.preventDefault();try{await saveBackupDirectory();toast('备份位置已记住');}catch(error){handle(error);}};
@@ -543,13 +546,26 @@ async function pollBackup() {
 }
 pollBackup();
 
-interface RestoreJob { id: string; stage: string; duration: number; done_bytes: number; total_bytes: number; path?: string; command?: string; error?: string }
+interface RestoreJob { id: string; mode?: 'merge' | 'separate'; stage: string; duration: number; done_bytes: number; total_bytes: number; path?: string; command?: string; error?: string; merge?: {sessions_added:number;sessions_matched:number;messages_added:number;messages_duplicate:number;conflicts:number;skipped_deleted:number} }
 let restoreJob: RestoreJob | null = null, restoreStarting = false, restorePolling = false, restoreTimer = 0;
-function restoreRunning() { return restoreStarting || !!restoreJob && ['uploading','restoring','validating'].includes(restoreJob.stage); }
+let restoreRequestVersion = 0;
+let refreshedMerge = '';
+function renderRestoreMode() {
+  const description = document.querySelector<HTMLElement>('#restore-mode-description');
+  if (description) description.textContent = input('#restore-mode').value === 'merge'
+    ? '保留当前记录，按对话和消息 ID 去重，同名项目放在一起，不添加项目后缀。正文冲突保留当前版本，备份版本存入原始记录；收藏取并集，已有隐藏和删除状态、同步配置保留。完成后可直接查看，无需重启。'
+    : '恢复到独立档案，当前文件继续保留。检查通过后，按提示重启服务切换。';
+}
+function restoreRunning() { return restoreStarting || !!restoreJob && ['uploading','restoring','validating','merging'].includes(restoreJob.stage); }
 function renderRestore() {
   const busy = restoreRunning();
-  for (const selector of ['#restore-path-button', '#restore-file']) {
-    const element = document.querySelector<HTMLInputElement | HTMLButtonElement>(selector);
+  const mode = document.querySelector<HTMLSelectElement>('#restore-mode');
+  if (busy && !restoreStarting && restoreJob?.mode && mode) {
+    mode.value = restoreJob.mode;
+    renderRestoreMode();
+  }
+  for (const selector of ['#restore-path-button', '#restore-file', '#restore-mode']) {
+    const element = document.querySelector<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>(selector);
     if (element) element.disabled = busy;
   }
   const progress = document.querySelector<HTMLElement>('#restore-progress');
@@ -560,31 +576,46 @@ function renderRestore() {
   if (!job) return;
   if (busy) {
     const percent = job.total_bytes ? Math.min(100, Math.floor(job.done_bytes / job.total_bytes * 100)) : 0;
-    progress.innerHTML = `<b>${icon('LoaderCircle','spinning')} ${job.stage === 'validating' ? '正在检查完整性' : job.stage === 'uploading' ? '正在上传备份' : '正在恢复完整档案'}</b><progress max="100" ${job.stage !== 'validating' && job.total_bytes ? `value="${percent}"` : ''}></progress><p>${job.stage !== 'validating' && job.total_bytes ? `${percent}% · ${size(job.done_bytes)} / ${size(job.total_bytes)} · ` : ''}${Math.floor(job.duration)} 秒 · 可以继续阅读</p>`;
+    progress.innerHTML = `<b>${icon('LoaderCircle','spinning')} ${job.stage === 'merging' ? '正在合并记录并建立索引' : job.stage === 'validating' ? '正在检查完整性' : job.stage === 'uploading' ? '正在上传备份' : '正在读取完整备份'}</b><progress max="100" ${job.stage !== 'validating' && job.total_bytes ? `value="${percent}"` : ''}></progress><p>${job.stage !== 'validating' && job.total_bytes ? `${percent}% · ${size(job.done_bytes)} / ${size(job.total_bytes)} · ` : ''}${Math.floor(job.duration)} 秒 · 可以继续阅读</p>`;
+  } else if (job.stage === 'ready' && job.mode === 'merge' && job.merge) {
+    const m = job.merge;
+    progress.innerHTML = `<b>${icon('CheckCircle2')} 备份已合并，可直接查看</b><p>新增 ${num(m.sessions_added)} 段对话，匹配已有 ${num(m.sessions_matched)} 段；新增 ${num(m.messages_added)} 条消息，去重 ${num(m.messages_duplicate)} 条。</p><p>同名项目已放在一起，当前记录和同步配置已保留，无需重启。</p>${m.conflicts ? `<p>${num(m.conflicts)} 条消息存在正文或类型冲突，已保留当前版本；备份版本可在对应对话的「导出原始事件」中查看。</p>` : ''}${m.skipped_deleted ? `<p>跳过 ${num(m.skipped_deleted)} 段在当前档案中已删除的对话。</p>` : ''}`;
   } else if (job.stage === 'ready') {
     progress.innerHTML = `<b>${icon('CheckCircle2')} 完整档案已恢复，检查通过</b><code>${esc(job.path)}</code><p>停止当前服务，然后在项目目录执行下面的命令，切换到恢复的档案：</p><code>${esc(job.command)}</code><button id="copy-restore-command" class="text-button">${icon('Copy')}复制启动命令</button><p>恢复是完整档案切换，不会合并进当前档案。当前数据文件仍然保留。</p>`;
     $('#copy-restore-command').onclick = () => navigator.clipboard.writeText(job.command || '').then(()=>toast('启动命令已复制')).catch(handle);
-  } else progress.innerHTML = `<b>恢复失败，可以重试</b><p>${esc(job.error)}</p>`;
+  } else progress.innerHTML = `<b>导入失败，可以重试</b><p>${esc(job.error)}</p>${job.mode === 'merge' ? '<p>本次合并未写入，当前记录保持原样。</p>' : ''}`;
 }
 async function startArchiveRestore(file?: File) {
   if (restoreRunning()) return;
+  restoreRequestVersion++;
   restoreStarting = true; renderRestore();
   try {
-    const result = file ? await api<{job:RestoreJob}>('/restore/upload', {method:'POST', headers:{'X-Echo-Request':'1'}, body:file}) : await post<{job:RestoreJob}>('/restore', {path:input('#restore-path').value});
-    restoreJob = result.job; toast('恢复任务已启动，可继续阅读');
+    const mode = input('#restore-mode').value;
+    const result = file ? await api<{job:RestoreJob}>('/restore/upload?mode='+encodeURIComponent(mode), {method:'POST', headers:{'X-Echo-Request':'1'}, body:file}) : await post<{job:RestoreJob}>('/restore', {path:input('#restore-path').value,mode});
+    restoreJob = result.job; toast('备份导入已启动，可继续阅读');
   } catch(error) { handle(error); }
   finally { restoreStarting = false; renderRestore(); pollRestore(); }
 }
 async function pollRestore() {
   if (restorePolling) return;
   clearTimeout(restoreTimer); restorePolling = true;
+  const version = restoreRequestVersion;
   try {
-    restoreJob = (await api<{job:RestoreJob|null}>('/restore/status')).job;
+    const result = await api<{job:RestoreJob|null}>('/restore/status');
+    if (version !== restoreRequestVersion) return;
+    restoreJob = result.job;
     renderRestore();
-  } catch(error) { if (restoreRunning()) handle(error); }
+    const completedJob = restoreJob;
+    if (completedJob?.stage === 'ready' && completedJob.mode === 'merge' && refreshedMerge !== completedJob.id) {
+      await refreshStats();
+      await loadList();
+      if (state.id) await openSession(state.id);
+      refreshedMerge = completedJob.id;
+    }
+  } catch(error) { if (version === restoreRequestVersion && restoreRunning()) handle(error); }
   finally {
     restorePolling = false;
-    if (restoreRunning()) restoreTimer = window.setTimeout(pollRestore, 1000);
+    if (restoreRunning() || version !== restoreRequestVersion) restoreTimer = window.setTimeout(pollRestore, 1000);
   }
 }
 pollRestore();

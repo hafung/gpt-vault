@@ -20,15 +20,17 @@ import (
 )
 
 type restoreJob struct {
-	ID         string  `json:"id"`
-	Stage      string  `json:"stage"`
-	Started    float64 `json:"started"`
-	Duration   float64 `json:"duration"`
-	DoneBytes  int64   `json:"done_bytes"`
-	TotalBytes int64   `json:"total_bytes"`
-	Path       string  `json:"path,omitempty"`
-	Command    string  `json:"command,omitempty"`
-	Error      string  `json:"error,omitempty"`
+	ID         string       `json:"id"`
+	Mode       string       `json:"mode"`
+	Stage      string       `json:"stage"`
+	Started    float64      `json:"started"`
+	Duration   float64      `json:"duration"`
+	DoneBytes  int64        `json:"done_bytes"`
+	TotalBytes int64        `json:"total_bytes"`
+	Path       string       `json:"path,omitempty"`
+	Command    string       `json:"command,omitempty"`
+	Error      string       `json:"error,omitempty"`
+	Merge      *mergeReport `json:"merge,omitempty"`
 }
 
 type restoreManager struct {
@@ -39,7 +41,7 @@ type restoreManager struct {
 }
 
 func restoreActive(stage string) bool {
-	return stage == "uploading" || stage == "restoring" || stage == "validating"
+	return stage == "uploading" || stage == "restoring" || stage == "validating" || stage == "merging"
 }
 
 func (m *restoreManager) close() {
@@ -77,7 +79,13 @@ func (a *App) restoreStatus(w http.ResponseWriter) error {
 	return nil
 }
 
-func (a *App) startRestore(w http.ResponseWriter, r *http.Request, path string) error {
+func (a *App) startRestore(w http.ResponseWriter, r *http.Request, path, mode string) error {
+	if mode == "" {
+		mode = "separate"
+	}
+	if mode != "merge" && mode != "separate" {
+		return errors.New("请选择合并到当前档案或恢复为独立档案")
+	}
 	// Reserve before uploading to prevent concurrent multi-gigabyte uploads.
 	a.restores.mu.Lock()
 	if a.restores.job != nil && restoreActive(a.restores.job.Stage) {
@@ -85,7 +93,7 @@ func (a *App) startRestore(w http.ResponseWriter, r *http.Request, path string) 
 		return errors.New("已有恢复任务正在运行，请等待完成")
 	}
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
-	job := &restoreJob{ID: id, Stage: "restoring", Started: now()}
+	job := &restoreJob{ID: id, Mode: mode, Stage: "restoring", Started: now()}
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	done := make(chan struct{})
 	a.restores.job, a.restores.cancel, a.restores.done = job, cancel, done
@@ -146,6 +154,12 @@ func (a *App) startRestore(w http.ResponseWriter, r *http.Request, path string) 
 		err := restoreArchive(ctx, path, dest, func(stage string, n, total int64) {
 			a.updateRestore(id, func(j *restoreJob) { j.Stage = stage; j.DoneBytes = n; j.TotalBytes = total })
 		})
+		var merged mergeReport
+		if err == nil && mode == "merge" {
+			defer os.Remove(dest)
+			a.updateRestore(id, func(j *restoreJob) { j.Stage = "merging"; j.DoneBytes = 0; j.TotalBytes = 0 })
+			merged, err = a.Store.mergeArchive(ctx, dest)
+		}
 		a.updateRestore(id, func(j *restoreJob) {
 			j.Duration = now() - j.Started
 			if err != nil {
@@ -153,8 +167,12 @@ func (a *App) startRestore(w http.ResponseWriter, r *http.Request, path string) 
 				j.Error = err.Error()
 			} else {
 				j.Stage = "ready"
-				j.Path = dest
-				j.Command = "./bin/gpt-vault --data '" + strings.ReplaceAll(dest, "'", "'\"'\"'") + "'"
+				if mode == "merge" {
+					j.Merge = &merged
+				} else {
+					j.Path = dest
+					j.Command = "./bin/gpt-vault --data '" + strings.ReplaceAll(dest, "'", "'\"'\"'") + "'"
+				}
 			}
 		})
 	}()

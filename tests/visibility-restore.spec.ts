@@ -93,6 +93,9 @@ test('compressed backup progress and complete restore instructions are shown sep
   await expect(page.locator('#backup-format')).toHaveValue('zstd');
   await expect(page.locator('#import-file')).toHaveAttribute('accept','.json,.zip');
   await expect(page.locator('#restore-file')).toHaveAttribute('accept','.sqlite,.sqlite3,.db,.zst');
+  await expect(page.locator('#restore-mode')).toHaveValue('merge');
+  await expect(page.locator('#restore-mode-description')).toContainText('完成后可直接查看');
+  await page.locator('#restore-mode').selectOption('separate');
   await page.locator('#restore-path').fill('D:/备份/echo.sqlite.zst');
   await page.locator('#restore-path-button').click();
   await expect(page.locator('#restore-progress')).toContainText('完整档案已恢复');
@@ -100,6 +103,80 @@ test('compressed backup progress and complete restore instructions are shown sep
   await expect(page.locator('#restore-progress')).toContainText('当前数据文件仍然保留');
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+});
+
+test('backup merge defaults to deduplication and refreshes records without restart instructions',async({page})=>{
+  let job:object|null=null, statsReads=0, sessionReads=0;
+  page.on('request',request=>{
+    if(request.url().includes('/api/stats?'))statsReads++;
+    if(request.url().includes('/api/sessions?'))sessionReads++;
+  });
+  await page.route('**/api/restore/status',route=>route.fulfill({json:{job}}));
+  await page.route('**/api/restore',route=>{
+    expect(route.request().postDataJSON()).toEqual({path:'D:/backup.sqlite',mode:'merge'});
+    job={id:'merge-ui',mode:'merge',stage:'ready',duration:1,done_bytes:0,total_bytes:0,merge:{sessions_added:1,sessions_matched:2,messages_added:3,messages_duplicate:4,conflicts:1,skipped_deleted:1}};
+    return route.fulfill({json:{job}});
+  });
+  await page.goto('/');
+  await page.locator('#sources-button').click();
+  await expect(page.locator('#restore-mode')).toHaveValue('merge');
+  const beforeStats=statsReads,beforeSessions=sessionReads;
+  await page.locator('#restore-path').fill('D:/backup.sqlite');
+  await page.locator('#restore-path-button').click();
+  await expect(page.locator('#restore-progress')).toContainText('备份已合并，可直接查看');
+  await expect(page.locator('#restore-progress')).toContainText('新增 1 段对话');
+  await expect(page.locator('#restore-progress')).toContainText('去重 4 条');
+  await expect(page.locator('#restore-progress')).toContainText('导出原始事件');
+  await expect(page.locator('#restore-progress')).toContainText('跳过 1 段');
+  await expect(page.locator('#copy-restore-command')).toHaveCount(0);
+  await expect.poll(()=>statsReads).toBeGreaterThan(beforeStats);
+  await expect.poll(()=>sessionReads).toBeGreaterThan(beforeSessions);
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});
+
+test('merge uploads include mode and keep controls disabled while committing',async({page})=>{
+  let job:object|null=null;
+  await page.route('**/api/restore/status',route=>route.fulfill({json:{job}}));
+  await page.route('**/api/restore/upload?mode=merge',route=>{
+    expect(route.request().method()).toBe('POST');
+    job={id:'merge-upload',mode:'merge',stage:'merging',duration:1,done_bytes:0,total_bytes:0};
+    return route.fulfill({json:{job}});
+  });
+  await page.goto('/');
+  await page.locator('#sources-button').click();
+  await page.locator('#restore-file').setInputFiles({name:'backup.sqlite',mimeType:'application/vnd.sqlite3',buffer:Buffer.from('test archive')});
+  await expect(page.locator('#restore-progress')).toContainText('正在合并记录');
+  await expect(page.locator('#restore-mode')).toBeDisabled();
+  await expect(page.locator('#restore-file')).toBeDisabled();
+  await expect(page.locator('#restore-path-button')).toBeDisabled();
+  job={id:'merge-upload',mode:'merge',stage:'error',duration:2,done_bytes:0,total_bytes:0,error:'附件内容冲突'};
+  await expect(page.locator('#restore-progress')).toContainText('本次合并未写入');
+  await expect(page.locator('#restore-progress')).toContainText('附件内容冲突');
+  await expect(page.locator('#restore-mode')).toBeEnabled();
+});
+
+test('a delayed old status cannot replace a newly started merge or stop polling',async({page})=>{
+  let release!:()=>void, calls=0;
+  const pending=new Promise<void>(resolve=>{release=resolve;});
+  const result={id:'new-merge',mode:'merge',stage:'ready',duration:1,done_bytes:0,total_bytes:0,merge:{sessions_added:1,sessions_matched:0,messages_added:1,messages_duplicate:0,conflicts:0,skipped_deleted:0}};
+  await page.route('**/api/restore/status',async route=>{
+    if(++calls===1){
+      await pending;
+      return route.fulfill({json:{job:null}});
+    }
+    return route.fulfill({json:{job:result}});
+  });
+  await page.route('**/api/restore',route=>route.fulfill({json:{job:{...result,stage:'merging',merge:undefined}}}));
+  await page.goto('/');
+  await expect.poll(()=>calls).toBe(1);
+  await page.locator('#sources-button').click();
+  await page.locator('#restore-path').fill('D:/backup.sqlite');
+  await page.locator('#restore-path-button').click();
+  await expect(page.locator('#restore-progress')).toContainText('正在合并记录');
+  release();
+  await expect(page.locator('#restore-progress')).toContainText('备份已合并，可直接查看');
+  await expect(page.locator('#restore-mode')).toBeEnabled();
 });
 
 

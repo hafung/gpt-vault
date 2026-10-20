@@ -87,9 +87,13 @@ Use these actions rather than copying only a running database's main `.sqlite` f
 
 ## Restore and migrate
 
-Data & sources accepts a local `.sqlite` / `.sqlite.zst` path or an uploaded backup. Local paths are preferable for large archives. Restore writes an independent SQLite file into the `restored` directory beside the current database and checks the archive schema and SQLite `quick_check` result. The panel then shows the new path and a launch command.
+Data & sources → **导入完整备份** accepts a local `.sqlite` / `.sqlite.zst` path or an uploaded backup. Local paths are preferable for large archives. The default **合并到当前档案** verifies a private staging copy, including the schema and SQLite `quick_check`, then merges into the current database in one transaction. The staging copy is removed afterward. Records and the project list refresh without restarting.
 
-Stop the current service and run that command to switch archives. Restore neither overwrites the current file nor merges archives. You can read while background restore and validation run; refreshing the panel retains job status. Stopping the service interrupts an unfinished restore.
+Merge identifies conversations by session ID and messages by their identity within the session, never by title alone. Identical project names share one sidebar entry; existing project assignments and names are kept, with no suffixes. Messages present on only one side are added and indexed using new local row IDs. Current bodies win conflicts; incoming versions are retained in the conversation's **导出原始事件** (raw export). Attachment IDs are combined, and conflicting image payloads abort the merge. Raw chunks with colliding file coordinates retain both versions. Repeating an import does not add duplicate conversations, messages, attachments, or raw versions.
+
+Favorites are combined. Existing local visibility and deletion choices win; visibility from the backup applies to newly added conversations and projects. Locally deleted conversations are skipped, and deletion markers from the backup never delete current conversations. Device settings, source paths, sync cursors, and sync history are not imported. A failure or cancellation rolls back the entire merge. Reading remains available while source imports and deletions wait for the merge transaction. The panel reports additions, duplicates, conflicts and skipped deletions.
+
+Choose **恢复为独立档案** to retain the previous separate-file workflow. It writes a verified SQLite file into the `restored` directory beside the current database and shows a launch command. Stop the current service and run that command to switch archives; the current file is kept. Refreshing the panel retains job status. Stopping the service interrupts an unfinished job.
 
 Backup uploads have a 1 TB limit; JSON / ZIP source imports have a separate 512 MB limit.
 
