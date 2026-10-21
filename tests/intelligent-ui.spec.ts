@@ -43,6 +43,40 @@ test('nested DIL keeps prose, inline entities, links, citations, loops and table
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });
 
+for (const nested of [false, true]) {
+  test(`Markdown tables keep DIL text in its cell${nested ? ' inside a layout' : ''}`, async ({ page }) => {
+    const table = `| 具体规定 | 风险判断 | 主要问题 |
+|---|---|---|
+| 绩效不合格，无补偿解除 | <text color="danger" weight="medium">高风险</text> | 不等于严重违纪 |
+| 严重失职，造成损害 | <text color="warning" weight="medium">门槛模糊</text> | 需要明确损害程度 |
+| 离职后持续保密 | <text color="secondary" weight="medium">原则上可合法</text> | 需要合理界定范围 |`;
+    const content = `判断如下：\n\n${table}\n\n后续 **说明**。`;
+    await fixture(page, nested ? `<box padding={3}>\n${content}\n</box>` : content,
+      nested ? { chatgpt_ui: { model_dil_v2: {} } } : {});
+    const prose = page.locator('.dil-response');
+    const rendered = prose.locator('table');
+    await expect(rendered).toHaveCount(1);
+    await expect(rendered.locator('th')).toHaveText(['具体规定', '风险判断', '主要问题']);
+    await expect(rendered.locator('tbody tr')).toHaveCount(3);
+    await expect(rendered.locator('tbody tr').first().locator('td')).toHaveText(['绩效不合格，无补偿解除', '高风险', '不等于严重违纪']);
+    await expect(rendered.locator('td .dil-text')).toHaveText(['高风险', '门槛模糊', '原则上可合法']);
+    await expect(prose.locator('strong')).toHaveText('说明');
+    await expect(prose).not.toContainText('|');
+    await expect(prose).not.toContainText('\uE000EV');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const rows = await rendered.locator('tbody tr').evaluateAll(elements => elements.map(row =>
+        Array.from(row.children, cell => ({ top: cell.getBoundingClientRect().top, height: cell.getBoundingClientRect().height }))));
+      for (const cells of rows) {
+        expect(cells).toHaveLength(3);
+        expect(new Set(cells.map(cell => cell.top)).size).toBe(1);
+        expect(new Set(cells.map(cell => cell.height)).size).toBe(1);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    }
+  });
+}
+
 test('resolved images use compiled resolution order, load on click and survive expansion', async ({ page }) => {
   let imageRequests = 0;
   await page.route('https://images.example/**', route => { imageRequests++; return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64') }); });

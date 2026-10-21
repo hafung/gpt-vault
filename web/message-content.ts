@@ -164,7 +164,13 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     }
     source = nested ? dedent(source) : source;
     const elements = nodes.filter((node): node is Element => typeof node !== 'string');
-    source = source.replace(/\uE000EV(\d+)\uE001/g, (marker, index: string) => inline.has(elements[Number(index)].name) ? marker : '\n\n' + marker + '\n\n');
+    // A component in a Markdown table belongs to its cell, even when it
+    // normally renders as a block. Blank lines here would split the table.
+    const tableSlots = new Set<string>();
+    if (elements.length) marked.walkTokens(marked.lexer(source), token => {
+      if (token.type === 'table') for (const match of token.raw.matchAll(/\uE000EV\d+\uE001/g)) tableSlots.add(match[0]);
+    });
+    source = source.replace(/\uE000EV(\d+)\uE001/g, (marker, index: string) => inline.has(elements[Number(index)].name) || tableSlots.has(marker) ? marker : '\n\n' + marker + '\n\n');
     let html = markdown(source, context);
     html = html.replace(/<p>(\uE000EV\d+\uE001)<\/p>/g, '$1');
     return html.replace(/\uE000EV(\d+)\uE001/g, (_, index: string) => slots[Number(index)] ?? '');

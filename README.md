@@ -94,7 +94,7 @@ pnpm start
 
 Open **http://localhost:8765**, then click **同步对话** (Sync conversations). Open **数据与来源** (Data & sources) to add a source, import a ChatGPT export, or manage backups.
 
-After building, Windows users can double-click **Start GPT Vault.cmd** in Explorer instead of running `pnpm start`. It launches projects stored in WSL in the correct distribution, opens the browser, and reuses an existing service. You can create a desktop shortcut and minimize the launcher window. Keeping a page open enables incremental sync roughly every five minutes.
+After building, Windows users can double-click **Start GPT Vault.cmd** in Explorer instead of running `pnpm start`. It launches projects stored in WSL in the correct distribution, opens the browser, and restarts an existing instance of the current project to load the latest build. Existing **Start Echo Vault.cmd** shortcuts behave the same way. You can create a desktop shortcut and minimize the launcher window. Keeping a page open enables incremental sync roughly every five minutes.
 
 The app currently has a Chinese interface. These READMEs are available in both languages.
 
