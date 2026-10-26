@@ -136,6 +136,7 @@ test('pension comparison layouts show cards, ratios and progress bars outside th
   await expect(page.locator('.dil-source')).not.toHaveAttribute('open');
   await expect(page.locator('.dil-source summary')).toHaveText('查看布局标记（正文已展示）');
   await expect(page.locator('.dil-note')).toHaveCount(0);
+  await expect(prose.locator('math')).toHaveCount(1);
   const boxes=prose.locator('.dil-row > .dil-box');
   expect(await boxes.first().evaluate(el=>getComputedStyle(el).flexGrow)).toBe('3');
   expect(await boxes.last().evaluate(el=>getComputedStyle(el).flexGrow)).toBe('2');
@@ -146,4 +147,81 @@ test('pension comparison layouts show cards, ratios and progress bars outside th
   expect(await fill.evaluate(el=>el.getBoundingClientRect().width/el.parentElement!.getBoundingClientRect().width)).toBeCloseTo(.75,2);
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+});
+
+const pensionFormula = String.raw`\[
+\text{基础养老金}=
+\frac{S+I}{2}\times N\times1\%
+\]`;
+
+for (const nested of [false, true]) {
+  test(`TeX renders fractions, percentages and inline variables${nested ? ' inside DIL' : ' in Markdown'}`, async ({ page }) => {
+    const content = pensionFormula + '\n\n' + String.raw`其中，\(S\) 是基数，\(N\) 是年限。` + '\n\n' + String.raw`\[\text{个人账户养老金}=\frac{\text{累计储存额}}{\text{计发月数}}\]`;
+    await fixture(page, nested ? `<box padding={3}>\n${content}\n</box>` : content);
+    const prose = page.locator('.prose');
+    await expect(prose.locator('math')).toHaveCount(4);
+    await expect(prose.locator('mfrac')).toHaveCount(2);
+    await expect(prose.locator('math mi').filter({ hasText: '%' })).toHaveCount(1);
+    await expect(prose.locator('math').first().locator('mtext')).toHaveText('基础养老金');
+    await expect(prose.locator('math').first().locator('mfrac mi')).toHaveText(['S', 'I']);
+    await expect(prose.locator('math').first()).toHaveText('基础养老金=S+I2×N×1%');
+    await expect(prose.locator('math[display="block"]')).toHaveCount(2);
+    await expect(page.locator('.dil-note')).toHaveCount(0);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const fraction = await prose.locator('mfrac').first().evaluate(node => ({
+        numerator: node.children[0].getBoundingClientRect().bottom,
+        denominator: node.children[1].getBoundingClientRect().top,
+      }));
+      expect(fraction.numerator).toBeLessThan(fraction.denominator);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    }
+  });
+}
+
+test('copied display blocks render while brackets, links and dollar amounts remain text', async ({ page }) => {
+  const copied = pensionFormula.replace(/\\([\[\]%])/g, '$1');
+  await fixture(page, copied + '\n\n[\n普通方括号\n]\n\n[文档](https://example.com)\n\n价格 $100 和 $200。\n\n$$x^2+1$$');
+  await expect(page.locator('.prose math')).toHaveCount(2);
+  await expect(page.locator('.prose math mi').filter({ hasText: '%' })).toHaveCount(1);
+  await expect(page.locator('.prose')).toContainText('普通方括号');
+  await expect(page.locator('.prose')).toContainText('价格 $100 和 $200。');
+  await expect(page.locator('.prose a')).toHaveAttribute('href', 'https://example.com');
+});
+
+test('code stays literal across longer fences, inline code and unclosed fences', async ({ page }) => {
+  const code = 'demo\n```\n' + pensionFormula + '\n\n' + pensionFormula.replace(/\\([\[\]%])/g, '$1') + '\n<box>{keepMe}</box>';
+  const tildeCode = '~~~\n' + pensionFormula + '\n{keepMe}';
+  const unclosed = pensionFormula + '\n{alsoKeepMe}';
+  await fixture(page, '<box>正文组件</box>\n\n````markdown\n' + code + '\n````\n\n~~~~latex\n' + tildeCode + '\n~~~~\n\n`' + String.raw`\(\frac{S+I}{2}\)` + '`\n\n' + pensionFormula + '\n\n```latex\n' + unclosed);
+  await expect(page.locator('.dil-response pre code')).toHaveText([code + '\n', tildeCode + '\n', unclosed + '\n']);
+  await expect(page.locator('.dil-response p code')).toHaveText(String.raw`\(\frac{S+I}{2}\)`);
+  await expect(page.locator('.dil-response math')).toHaveCount(1);
+  await expect(page.locator('.dil-note')).toHaveCount(0);
+});
+
+test('expanded formulas and search highlighting preserve the MathML structure', async ({ page }) => {
+  await fixture(page, '<box>截断内容</box>', {}, true, '<box>\n' + pensionFormula + '\n</box>');
+  await page.locator('.expand-message').click();
+  const math = page.locator('.dil-response math');
+  await expect(math.locator('mfrac')).toHaveCount(1);
+  const initial = await math.evaluate(node => node.outerHTML);
+  await page.locator('#session-search').click();
+  for (const query of ['基础养老金', 'N']) {
+    await page.locator('#local-query').fill(query);
+    await expect(page.locator('.math-search-hit')).toHaveCount(1);
+    expect(await math.evaluate(node => node.outerHTML)).toBe(initial);
+    await expect(math.locator('mark,button')).toHaveCount(0);
+  }
+  await page.locator('#close-local-search').click();
+  await expect(page.locator('.math-search-hit')).toHaveCount(0);
+  expect(await math.evaluate(node => node.outerHTML)).toBe(initial);
+});
+
+test('invalid TeX keeps its source and following content without enabling archived HTML', async ({ page }) => {
+  await fixture(page, '<box>\n' + String.raw`\[\unknownCommand{broken}\]` + '\n\n后续 **正文**。\n\n' + String.raw`\(\text{<img src=x onerror=alert(1)>}\)` + '\n</box>');
+  await expect(page.locator('.dil-response')).toContainText(String.raw`\unknownCommand{broken}`);
+  await expect(page.locator('.dil-response strong')).toHaveText('正文');
+  await expect(page.locator('.prose img,.prose script,.prose [onerror]')).toHaveCount(0);
+  await expect(page.locator('.dil-note')).toHaveCount(0);
 });

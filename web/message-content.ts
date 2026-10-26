@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { staticValue, type Scope } from './dil-values';
+import { markdownLiteralEnd, mapMarkdownText } from './math';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -41,19 +42,9 @@ function parts(source: string): Part[] {
   const lastIndex = (name: string) => { for (let i = stack.length - 1; i > 0; i--) if (stack[i].name === name) return i; return -1; };
   const append = (value: Part) => { const children = stack.at(-1)!.children; if (typeof value === 'string' && typeof children.at(-1) === 'string') children[children.length - 1] += value; else children.push(value); };
   for (let i = 0; i < source.length;) {
+    const literalEnd = markdownLiteralEnd(source, i);
+    if (literalEnd > i) { append(source.slice(i, literalEnd)); i = literalEnd; continue; }
     if (source[i] === '\\' && i + 1 < source.length) { append(source.slice(i, i + 2)); i += 2; continue; }
-    // Leave both fenced and inline code completely opaque to DIL parsing.
-    const fence = (i === 0 || source[i - 1] === '\n') && /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/.exec(source.slice(i));
-    if (fence) {
-      const close = new RegExp('^ {0,3}' + fence[1][0] + '{' + fence[1].length + ',}[ \\t]*(?:\\n|$)', 'm');
-      const rest = source.slice(i + fence[0].length), match = close.exec(rest);
-      const end = match ? i + fence[0].length + match.index + match[0].length : source.length;
-      append(source.slice(i, end)); i = end; continue;
-    }
-    if (source[i] === '`') {
-      const run = /^`+/.exec(source.slice(i))![0], end = source.indexOf(run, i + run.length);
-      if (end >= 0) { append(source.slice(i, end + run.length)); i = end + run.length; continue; }
-    }
     if (source[i] === '<') {
       const match = /^<(\/?)([A-Za-z][\w-]*)(?=[\s/>])/.exec(source.slice(i));
       const name = match?.[2].toLowerCase();
@@ -139,13 +130,11 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   const scope = Object.assign(Object.create(null), dil?.appData?.opGenui?.modelDataBindings ?? {}) as Scope;
   let limited = false, count = 0;
   function markdown(source: string, context: Scope): string {
-    // Only interpolate outside code spans/fences; parts() has already preserved them.
-    source = source.replace(/(`{3,}[^\n]*\n[\s\S]*?(?:\n`{3,}|$)|~{3,}[^\n]*\n[\s\S]*?(?:\n~{3,}|$)|(`+)[\s\S]*?\2|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))|\{([^{}\n]+)\}/g, (raw, code: string | undefined, _ticks: string, expression: string) => {
-      if (code) return raw;
+    source = mapMarkdownText(source, prose => prose.replace(/\{([^{}\n]+)\}/g, (raw, expression: string) => {
       const value = staticValue(expression, context);
       if (value === undefined || typeof value === 'object') { limited = true; return '<code>' + esc(raw) + '</code>'; }
       return esc(value).replace(/([\\`*_[\]#])/g, '\\$1');
-    });
+    }));
     return marked.parse(source, { async: false }) as string;
   }
   function children(nodes: Part[], context: Scope, nested = true, depth = 0): string {

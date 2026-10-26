@@ -275,7 +275,7 @@ function decorateProse() {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); const nodes: Text[] = [];
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (node.parentElement?.closest('.prose') && !node.parentElement.closest('a, button, code, pre')) nodes.push(node);
+    if (node.parentElement?.closest('.prose') && !node.parentElement.closest('a, button, code, pre, math, .rendered-math')) nodes.push(node);
   }
   for (const node of nodes) {
     const text = node.textContent || ''; const fragment = document.createDocumentFragment(); let last = 0;
@@ -300,11 +300,13 @@ function decorateProse() {
 function markReader() {
   const root = $('#messages'); if (!root) return;
   root.querySelectorAll('mark').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+  root.querySelectorAll('.math-search-hit').forEach(math => math.classList.remove('math-search-hit'));
   const terms = (state.localQuery || state.q).match(/"[^"]+"|\S+/g)?.map(t => t.replace(/^"|"$/g,'')) || [];
   if (!terms.length) return;
   const pattern = new RegExp(terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'gi');
+  root.querySelectorAll('.rendered-math').forEach(math => { pattern.lastIndex = 0; if (pattern.test(math.textContent || '')) math.classList.add('math-search-hit'); });
   const walker = document.createTreeWalker(root,NodeFilter.SHOW_TEXT); const nodes: Text[] = [];
-  while(walker.nextNode()) { const node = walker.currentNode as Text; if (node.parentElement?.closest('.prose') && !node.parentElement.closest('button:not(.local-path-link)')) nodes.push(node); }
+  while(walker.nextNode()) { const node = walker.currentNode as Text; if (node.parentElement?.closest('.prose') && !node.parentElement.closest('button:not(.local-path-link), math, .rendered-math')) nodes.push(node); }
   let count = 0;
   for (const node of nodes) { pattern.lastIndex = 0; const text = node.textContent || ''; if (!pattern.test(text)) continue; pattern.lastIndex = 0; const fragment = document.createDocumentFragment(); let last = 0; for (const match of text.matchAll(pattern)) { if (++count > 1000) break; fragment.append(document.createTextNode(text.slice(last,match.index))); const mark = document.createElement('mark'); mark.textContent = match[0]; fragment.append(mark); last = match.index!+match[0].length; } fragment.append(document.createTextNode(text.slice(last))); node.replaceWith(fragment); if (count > 1000) break; }
 }
