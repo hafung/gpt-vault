@@ -398,6 +398,9 @@ func TestSessionSyncReportsUnavailableWithoutSuccessOrArchiveChanges(t *testing.
 	if len(report.Errors) != 1 || report.SessionResult != nil || report.Stage != "done_with_errors" || count(t, s, "messages") != 1 {
 		t.Fatal("unavailable incorrectly succeeded", report)
 	}
+	if report.DesktopError != report.Errors[0].Error {
+		t.Fatal("reader cannot explain why enhanced sync is unavailable", report)
+	}
 	if _, err = i.startSessionSync("missing"); !errors.Is(err, errNotFound) {
 		t.Fatal("missing session accepted")
 	}

@@ -249,6 +249,16 @@ func (a *App) post(w http.ResponseWriter, r *http.Request) error {
 		}
 		jsonResponse(w, M{"ok": true})
 		return nil
+	case "/api/desktop-capture/repair":
+		if v["confirmed"] != true {
+			return errors.New("恢复补全连接可能重启 ChatGPT，请先确认")
+		}
+		started, err := a.Importer.startDesktopSync(str(v["session_id"]), true)
+		if err != nil {
+			return err
+		}
+		jsonResponse(w, M{"started": started})
+		return nil
 	case "/api/desktop-capture":
 		enabled, ok := v["enabled"].(bool)
 		if !ok {

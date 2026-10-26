@@ -25,6 +25,9 @@ const desktopCheckpointPrefix = "desktop_capture_checkpoint:"
 //go:embed scripts/capture-chatgpt-desktop.ps1
 var desktopCaptureScript string
 
+//go:embed scripts/start-chatgpt-enhanced.ps1
+var desktopStartScript string
+
 var desktopConversationID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 type desktopCheckpoint struct {
@@ -208,31 +211,40 @@ func (i *Importer) desktopCaptureCandidates(full bool, timestamp float64, recent
 // Explicit reads bypass the automatic batch, completion cache and retry delay.
 // Partial pagination can continue; a previously completed read starts afresh.
 func (i *Importer) startSessionSync(sid string) (bool, error) {
-	row, err := one(i.Store.DB, "SELECT id,title,updated,provider,platform,metadata FROM sessions WHERE id=?", sid)
-	if err != nil {
-		return false, err
-	}
-	var metadata M
-	json.Unmarshal([]byte(str(row["metadata"])), &metadata)
-	id := strings.TrimPrefix(sid, "chatgpt:")
-	if !strings.HasPrefix(sid, "chatgpt:") || !desktopConversationID.MatchString(id) || row["provider"] != "ChatGPT" || row["platform"] != "Windows" || metadata["desktop_cache"] != true {
-		return false, errors.New("单会话重新同步目前支持 Windows Desktop Chat 对话")
+	return i.startDesktopSync(sid, false)
+}
+
+// A restart is allowed only through the explicitly confirmed repair action.
+// Scheduled and ordinary syncs never call the Desktop launcher.
+func (i *Importer) startDesktopSync(sid string, repair bool) (bool, error) {
+	var job desktopCaptureJob
+	if sid != "" {
+		row, err := one(i.Store.DB, "SELECT id,title,updated,provider,platform,metadata FROM sessions WHERE id=?", sid)
+		if err != nil {
+			return false, err
+		}
+		var metadata M
+		json.Unmarshal([]byte(str(row["metadata"])), &metadata)
+		id := strings.TrimPrefix(sid, "chatgpt:")
+		if !strings.HasPrefix(sid, "chatgpt:") || !desktopConversationID.MatchString(id) || row["provider"] != "ChatGPT" || row["platform"] != "Windows" || metadata["desktop_cache"] != true {
+			return false, errors.New("单会话重新同步目前支持 Windows Desktop Chat 对话")
+		}
+		job = desktopCaptureJob{ID: id, title: str(row["title"]), updated: number(row["updated"])}
+		checkpoint, err := one(i.Store.DB, "SELECT value FROM settings WHERE key=?", desktopCheckpointPrefix+sid)
+		if err != nil && !errors.Is(err, errNotFound) {
+			return false, err
+		}
+		json.Unmarshal([]byte(str(checkpoint["value"])), &job.checkpoint)
+		if !job.checkpoint.Complete && job.checkpoint.Updated == job.updated {
+			job.Cursor = job.checkpoint.Cursor
+		}
 	}
 	settings, err := i.desktopCaptureSettings()
 	if err != nil {
 		return false, err
 	}
 	if settings["enabled"] != true {
-		return false, errors.New("请先在数据与来源启用桌面同步与历史补全，并通过 Start ChatGPT Enhanced.cmd 启动 Desktop")
-	}
-	job := desktopCaptureJob{ID: id, title: str(row["title"]), updated: number(row["updated"])}
-	checkpoint, err := one(i.Store.DB, "SELECT value FROM settings WHERE key=?", desktopCheckpointPrefix+sid)
-	if err != nil && !errors.Is(err, errNotFound) {
-		return false, err
-	}
-	json.Unmarshal([]byte(str(checkpoint["value"])), &job.checkpoint)
-	if !job.checkpoint.Complete && job.checkpoint.Updated == job.updated {
-		job.Cursor = job.checkpoint.Cursor
+		return false, errors.New("请先在数据与来源启用桌面同步与历史补全")
 	}
 	if !i.claimSync(false, now()) {
 		return false, nil
@@ -241,18 +253,58 @@ func (i *Importer) startSessionSync(sid string) (bool, error) {
 		s.SessionID = sid
 		s.Stage = "chatgpt_desktop_live"
 		s.File = job.title
-		s.Total = 1
-		s.DesktopPending = 1
+		if sid != "" {
+			s.Total = 1
+			s.DesktopPending = 1
+		}
+		if repair {
+			s.Stage = "chatgpt_desktop_repair"
+			s.File = "恢复桌面补全连接"
+		}
 	})
 	go func() {
 		defer i.finishSync()
-		i.captureDesktopJobs([]desktopCaptureJob{job}, false, true)
+		if repair {
+			restore := i.desktopRestore
+			if restore == nil {
+				restore = restoreDesktopCapture
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			if err := restore(ctx); err != nil {
+				i.update(func(s *SyncStatus) { s.DesktopError = err.Error() })
+				i.issue("恢复桌面补全连接", err, false)
+				return
+			}
+		}
+		if sid != "" {
+			i.update(func(s *SyncStatus) { s.Stage = "chatgpt_desktop_live" })
+			i.captureDesktopJobs([]desktopCaptureJob{job}, false, true)
+		} else {
+			i.captureDesktopChats(false)
+		}
 	}()
 	return true, nil
 }
 
+func restoreDesktopCapture(ctx context.Context) error {
+	// The launcher checks the installed executable and localhost port ownership,
+	// and reuses an already enabled Desktop. No request controls its command.
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell("& {\n"+desktopStartScript+"\n} -Restart"))
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return errors.New("恢复桌面补全连接超时；请等待 Desktop 打开后重试")
+		}
+		return errors.New("未能恢复桌面补全连接；请运行 Start ChatGPT Enhanced.cmd 查看原因，确认 Desktop 已安装且补全端口未被其他程序占用")
+	}
+	return nil
+}
+
 func desktopUnavailable(reason string) error {
 	switch reason {
+	case "inspector":
+		return errors.New("ChatGPT Desktop 未开启历史补全入口，本次无法读取缺失的历史；请点击「恢复补全连接并同步」")
 	case "module":
 		return errors.New("当前 Desktop 版本的读取模块不兼容；请更新 GPT Vault 后重试")
 	case "connection":
@@ -410,6 +462,7 @@ func (i *Importer) importDesktopCapture(job desktopCaptureJob, result desktopCap
 	}
 	i.update(func(s *SyncStatus) {
 		s.Imported += n
+		s.DesktopError = ""
 		if s.SessionID == "chatgpt:"+job.ID {
 			s.Done = 1
 			s.SessionResult = &sessionSyncResult{Complete: result.Complete, Pages: result.Pages, Messages: int(integer(row["message_count"])), Streaming: streaming, MissingBodies: missingBodies}
@@ -481,7 +534,9 @@ func (i *Importer) discoverDesktopChats() []desktopRecentConversation {
 			}
 			recent = result.Recent
 		case "unavailable":
-			return desktopUnavailable(result.Error)
+			err := desktopUnavailable(result.Error)
+			i.update(func(s *SyncStatus) { s.DesktopError = err.Error() })
+			return err
 		default:
 			return fmt.Errorf("最近会话列表读取失败（HTTP %d）；本轮继续同步磁盘缓存和已收录会话", result.Status)
 		}
@@ -511,7 +566,9 @@ func (i *Importer) captureDesktopJobs(jobs []desktopCaptureJob, full, targeted b
 	received := map[string]bool{}
 	err := reader(ctx, jobs, func(result desktopCaptureResult) error {
 		if result.Kind == "unavailable" {
-			i.issue("桌面同步与历史补全", desktopUnavailable(result.Error), !targeted)
+			err := desktopUnavailable(result.Error)
+			i.update(func(s *SyncStatus) { s.DesktopError = err.Error() })
+			i.issue("桌面同步与历史补全", err, !targeted)
 			for _, job := range jobs {
 				received[job.ID] = true
 			}

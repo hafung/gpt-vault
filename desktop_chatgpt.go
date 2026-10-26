@@ -332,9 +332,16 @@ func (i *Importer) desktopChatGPT(source Source, full bool) error {
 		path := source.Path + "::" + hash([]byte(entry.key))
 		digest := hash(entry.raw)
 		if !full {
-			previous, e := one(i.Store.DB, "SELECT head_hash FROM files WHERE path=?", path)
+			previous, e := one(i.Store.DB, "SELECT f.head_hash,s.title,s.metadata FROM files f LEFT JOIN sessions s ON s.id=f.session_id WHERE f.path=?", path)
 			if e == nil && str(previous["head_hash"]) == digest {
 				i.update(func(s *SyncStatus) { s.Skipped++ })
+				// Unchanged response bytes do not mean the history is complete.
+				// Keep reporting the gap until enhanced sync actually fills it.
+				var metadata M
+				json.Unmarshal([]byte(str(previous["metadata"])), &metadata)
+				if metadata["cache_partial"] == true && metadata["desktop_capture_complete"] != true {
+					i.issue(str(first(previous["title"], entry.sid)), errors.New(desktopPartialCacheWarning), true)
+				}
 				continue
 			}
 		}

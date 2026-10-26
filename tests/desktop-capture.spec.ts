@@ -2,16 +2,18 @@ import {test,expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 
-test('Desktop capture is opt-in, persists the setting and uses ordinary sync without a restart API',async({page})=>{
+test('Desktop capture is opt-in, persists the setting and uses ordinary sync without an automatic restart',async({page})=>{
   let enabled=false;
   let running=false;
   const settings:unknown[]=[];
   const syncs:unknown[]=[];
+  const repairs:unknown[]=[];
   const stamp=Date.now()/1000;
   await page.route('**/*',async route=>{
     const url=new URL(route.request().url());
     const method=route.request().method();
     if(url.pathname==='/api/sources')return route.fulfill({json:{sources:[],chatgpt:'',desktop_capture:{enabled,supported:true,port:19222}}});
+    if(url.pathname==='/api/desktop-capture/repair'){repairs.push(route.request().postDataJSON());running=true;return route.fulfill({json:{started:true}});}
     if(url.pathname==='/api/desktop-capture'){
       const payload=route.request().postDataJSON();settings.push(payload);enabled=payload.enabled;
       return route.fulfill({json:{enabled,supported:true,port:19222}});
@@ -39,6 +41,20 @@ test('Desktop capture is opt-in, persists the setting and uses ordinary sync wit
   expect(syncs[0]).toEqual({full:false});
   await expect(page.locator('#sync-status')).toContainText('正在同步桌面会话');
   await expect(toggle).toBeEnabled();
+  expect(repairs).toHaveLength(0);
+  running=false;
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#sync-button')).toBeEnabled();
+  await page.locator('#sources-dialog').getByRole('button',{name:'关闭',exact:true}).click();
+  await page.locator('#sources-button').click();
+  const repair=page.getByRole('button',{name:'恢复补全连接并同步',exact:true});
+  page.once('dialog',dialog=>dialog.dismiss());
+  await repair.click();
+  expect(repairs).toHaveLength(0);
+  page.once('dialog',dialog=>dialog.accept());
+  await repair.click();
+  await expect.poll(()=>repairs.length).toBe(1);
+  expect(repairs[0]).toEqual({confirmed:true});
   await toggle.uncheck();
   await expect.poll(()=>settings.length).toBe(2);
   expect(settings[1]).toEqual({enabled:false});

@@ -47,14 +47,16 @@ type SyncStatus struct {
 	Duration        float64            `json:"duration"`
 	DesktopCaptured int                `json:"desktop_captured"`
 	DesktopPending  int                `json:"desktop_pending"`
+	DesktopError    string             `json:"desktop_error,omitempty"`
 	SessionID       string             `json:"session_id,omitempty"`
 	SessionResult   *sessionSyncResult `json:"session_result,omitempty"`
 }
 type Importer struct {
-	Store       *Store
-	mu          sync.Mutex
-	state       SyncStatus
-	desktopRead func(context.Context, []desktopCaptureJob, func(desktopCaptureResult) error) error
+	Store          *Store
+	mu             sync.Mutex
+	state          SyncStatus
+	desktopRead    func(context.Context, []desktopCaptureJob, func(desktopCaptureResult) error) error
+	desktopRestore func(context.Context) error
 }
 type rolloutFile struct {
 	path     string
@@ -1229,7 +1231,8 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 	if original != nil && page["has_next_page"] == true && oldMeta["current_node"] != nil {
 		current = oldMeta["current_node"]
 	}
-	meta := M{"current_node": current, "branch_count": len(nodes), "desktop_cache": original != nil, "cache_partial": !complete && (page["has_previous_page"] == true || page["has_next_page"] == true), "desktop_capture_complete": complete}
+	partial := !complete && (page["has_previous_page"] == true || page["has_next_page"] == true || original != nil && oldMeta["cache_partial"] == true)
+	meta := M{"current_node": current, "branch_count": len(nodes), "desktop_cache": original != nil, "cache_partial": partial, "desktop_capture_complete": complete}
 	if capture["pages"] != nil {
 		meta["desktop_capture_pages"] = capture["pages"]
 	}

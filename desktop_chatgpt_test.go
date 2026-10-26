@@ -147,6 +147,37 @@ func TestDesktopCacheBrotliPaginationAndExportDedup(t *testing.T) {
 	}
 }
 
+func TestDesktopCachePartialHistoryStaysVisibleAcrossUnchangedRetries(t *testing.T) {
+	s := testStore(t)
+	root := t.TempDir()
+	snapshot := M{"conversation_id": "partial-retry", "title": "缺失开头", "create_time": 100, "update_time": 110,
+		"messages": []any{cacheMessage("recent", "user", "从中间开始的问题", 109)}, "page_info": M{"has_previous_page": true}}
+	writeCacheFixture(t, root, cacheFixtureEntry{key: "https://chatgpt.com/backend-api/conversations/partial-retry?num_turns=10", data: snapshot})
+	source := Source{root, "Windows", true, desktopCacheKind}
+	check(t, newImporter(s).desktopChatGPT(source, false))
+	retry := newImporter(s)
+	check(t, retry.desktopChatGPT(source, false))
+	if retry.status().Imported != 0 || retry.status().Skipped != 1 || len(retry.status().Warnings) != 1 {
+		t.Fatal("unchanged partial history disappeared from the retry report", retry.status())
+	}
+	// Reading an older page alone cannot prove every gap has been filled.
+	older := M{"conversation_id": "partial-retry", "messages": []any{cacheMessage("older", "user", "更早的问题", 105)}, "page_info": M{"has_previous_page": false}}
+	_, err := retry.chatgptConversation(older, "old-page", 1, false, "Windows", []byte(jsonText(older)))
+	check(t, err)
+	row, err := one(s.DB, "SELECT json_extract(metadata,'$.cache_partial') partial FROM sessions WHERE id='chatgpt:partial-retry'")
+	check(t, err)
+	if integer(row["partial"]) != 1 {
+		t.Fatal("a single page hid the unresolved gap", row)
+	}
+	job := desktopCaptureJob{ID: "partial-retry", updated: 110}
+	check(t, retry.importDesktopCapture(job, liveTestResult(job.ID, true, "", cacheMessage("first", "user", "真正的第一问", 101), cacheMessage("recent", "user", "从中间开始的问题", 109)), false))
+	recovered := newImporter(s)
+	check(t, recovered.desktopChatGPT(source, false))
+	if len(recovered.status().Warnings) != 0 || count(t, s, "messages") != 3 {
+		t.Fatal("filled history still reported a gap or lost archived messages", recovered.status())
+	}
+}
+
 func TestDesktopCacheTruncationAndInvalidPayloadDoNotCheckpoint(t *testing.T) {
 	s := testStore(t)
 	i := newImporter(s)
