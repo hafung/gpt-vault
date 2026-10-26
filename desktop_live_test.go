@@ -298,8 +298,15 @@ func TestDesktopLiveReadProbe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	complete := false
+	images, pendingImages := 0, 0
 	check(t, readDesktopCapture(ctx, []desktopCaptureJob{job}, func(result desktopCaptureResult) error {
+		if result.Kind == "images" {
+			images += len(result.Images)
+			pendingImages += result.PendingImages
+			return i.importDesktopImages(job, result)
+		}
 		if result.Kind != "conversation" {
+			t.Logf("Desktop result kind=%s status=%d", result.Kind, result.Status)
 			return &liveProbeError{result.Kind, result.Status}
 		}
 		complete = result.Complete
@@ -307,7 +314,10 @@ func TestDesktopLiveReadProbe(t *testing.T) {
 	}))
 	row, err := one(i.Store.DB, "SELECT message_count,total_count FROM sessions WHERE id=?", "chatgpt:"+id)
 	check(t, err)
-	t.Logf("Desktop live read: complete=%v dialogue=%d records=%d", complete, integer(row["message_count"]), integer(row["total_count"]))
+	t.Logf("Desktop live read: complete=%v dialogue=%d records=%d images=%d pending_images=%d", complete, integer(row["message_count"]), integer(row["total_count"]), images, pendingImages)
+	if os.Getenv("ECHO_DESKTOP_EXPECT_IMAGES") == "1" && images == 0 {
+		t.Fatal("live image download did not archive any bytes")
+	}
 	if !complete || integer(row["message_count"]) == 0 {
 		t.Fatal("live conversation was not completed")
 	}

@@ -354,9 +354,18 @@ func mergeMetadata(local, incoming string) (string, error) {
 				}
 			}
 			a[key] = items
+		} else if key == "image_assets" {
+			images := obj(a[key])
+			for ref, id := range obj(value) {
+				if images[ref] == nil {
+					images[ref] = id
+				}
+			}
+			a[key] = images
 		} else if _, exists := a[key]; !exists {
 			a[key] = value
 		}
 	}
+	preserveChatGPTImages(a, a)
 	return jsonText(a), nil
 }

@@ -552,7 +552,7 @@ func (i *Importer) assets(db DBQuery, parts any, paths []any) ([]any, error) {
 	result := []any{}
 	for _, part := range array(parts) {
 		p := obj(part)
-		v := first(p["image_url"], p["url"], p["asset_pointer"])
+		v := first(p["image_url"], p["url"], p["asset_pointer"], obj(p["image_asset_pointer"])["asset_pointer"])
 		if m, ok := v.(map[string]any); ok {
 			v = m["url"]
 		}
@@ -1300,20 +1300,25 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 			return 0, e
 		}
 		meta := M{"branch": len(active) > 0 && !active[nid], "parent": node["parent"], "assets": assets, "node_id": nid}
-		ui := chatGPTUI(obj(m["metadata"]))
-		if len(ui) > 0 {
-			meta["chatgpt_ui"] = ui
-		}
-		// Older snapshots must not discard already archived resolved UI data.
-		if len(obj(ui["model_dil_v2"])) == 0 {
-			if previous, err := one(tx, "SELECT metadata FROM messages WHERE session_id=? AND identity=?", sid, "node:"+nid); err == nil {
-				var old M
-				if json.Unmarshal([]byte(str(previous["metadata"])), &old) == nil && old["chatgpt_ui"] != nil {
-					meta["chatgpt_ui"] = old["chatgpt_ui"]
-				}
-			} else if !errors.Is(err, errNotFound) {
+		var old M
+		if previous, err := one(tx, "SELECT metadata FROM messages WHERE session_id=? AND identity=?", sid, "node:"+nid); err == nil {
+			if err = json.Unmarshal([]byte(str(previous["metadata"])), &old); err != nil {
 				return 0, err
 			}
+			preserveChatGPTImages(meta, old)
+		} else if !errors.Is(err, errNotFound) {
+			return 0, err
+		}
+		ui := chatGPTUI(obj(m["metadata"]))
+		// Fill missing fields from older snapshots without replacing fresh image
+		// addresses or citations with a previous version of the entire UI object.
+		for key, value := range obj(old["chatgpt_ui"]) {
+			if ui[key] == nil {
+				ui[key] = value
+			}
+		}
+		if len(ui) > 0 {
+			meta["chatgpt_ui"] = ui
 		}
 		if body == "" {
 			body = str(obj(ui["model_dil_v2"])["fallbackMarkdown"])

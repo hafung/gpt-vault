@@ -13,6 +13,7 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
   });
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
+    if (path.startsWith('/api/assets/')) return route.fulfill({contentType:'image/png', body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64')});
     if (path === '/api/stats') return route.fulfill({ json: { sessions: 1, messages: 1, events: 1, projects: 1, favorites: 0, projects_list: [], platforms: [], providers: [], last_sync: 1, db_bytes: 0, raw_bytes: 0 } });
     if (path === '/api/messages/1') return route.fulfill({ json: { body: expanded } });
     if (path === '/api/sessions/dil-fixture') return route.fulfill({ json: { session, offset: 0, total: 1, more: false, items: [{ id: 1, role: 'assistant', kind: 'message', phase: '', timestamp: session.created, body, metadata, truncated, length: 25000 }] } });
@@ -41,6 +42,36 @@ test('nested DIL keeps prose, inline entities, links, citations, loops and table
   await expect(prose.locator('p code').last()).toHaveText('<Entity value="原样保留"/>');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
+test('image_group renders archived pictures offline, keeps code literal and survives expansion', async ({ page }) => {
+  const marker = '\uE200image_group\uE202'+JSON.stringify({layout:'carousel',image_refs:['turn345082image0','turn345082image2']})+'\uE201';
+  const id = 'a'.repeat(64);
+  let remoteRequests = 0;
+  await page.route('https://images.example/**', route => { remoteRequests++; return route.abort(); });
+  const metadata = {assets:[id], image_assets:{'https://images.example/first.png':id}, chatgpt_ui:{content_references:[{type:'image_group',matched_text:marker,images:[{image_result:{content_url:'https://images.example/first.png',title:'已归档图片',url:'https://example.com/source'}},{image_result:{content_url:'https://images.example/second.png',title:'待归档图片'}}]}]}};
+  const body = `图片如下：\n\n${marker}\n\n说明 **保留**。\n\n\`\`\`text\n${marker}\n\`\`\``;
+  await fixture(page,body,metadata,true,body+'\n\n完整内容。');
+  await expect(page.locator('.chatgpt-image-group .dil-image')).toHaveCount(2);
+  await expect(page.locator('.dil-local-image img')).toHaveAttribute('src','/api/assets/'+id);
+  await expect.poll(()=>page.locator('.dil-local-image img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+  await expect(page.locator('.image-link')).toHaveCount(0);
+  await expect(page.locator('.dil-load-image')).toHaveCount(1);
+  await expect(page.locator('.prose pre code')).toHaveText(marker+'\n');
+  expect(remoteRequests).toBe(0);
+  await page.locator('.expand-message').click();
+  await expect(page.locator('.prose')).toContainText('完整内容');
+  await expect(page.locator('.chatgpt-image-group .dil-image')).toHaveCount(2);
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+});
+
+test('missing and malformed image groups have readable fallbacks',async({page})=>{
+  await fixture(page,'前文。\n\n\uE200image_group\uE202{"image_refs":["turn1image0"]}\uE201\n\n\uE200image_group\uE202broken\uE201\n\n后文。');
+  await expect(page.locator('.prose')).toContainText('图片组的地址未包含在存档中');
+  await expect(page.locator('.prose')).toContainText('图片组格式无法解析');
+  await expect(page.locator('.prose')).toContainText('后文');
+  await expect(page.locator('.prose')).not.toContainText('\uE200');
 });
 
 for (const nested of [false, true]) {

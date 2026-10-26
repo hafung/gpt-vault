@@ -106,8 +106,30 @@ function dedent(source: string): string {
   return lines.map(line => line.slice(Math.min(amount, /^ */.exec(line)![0].length))).join('\n').trim();
 }
 
-export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false): string {
-  const sanitize = (html: string) => DOMPurify.sanitize(html, { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
+export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}): string {
+  const original = body, groups: string[] = [];
+  function imageFigure(item: Data, fallback = '回答中的图片'): string {
+    const urls = [item.content_url, item.original_content_url, item.thumbnail_url, item.src, item.url];
+    const url = urls.map(safeRemoteURL).find(Boolean);
+    const id = urls.map(value => imageAssets[text(value)]).find(value => /^[a-f0-9]{64}$/.test(value ?? ''));
+    const label = text(item.title ?? item.alt) || fallback, source = safeRemoteURL(item.url);
+    const preview = id ? `<span class="dil-local-image" data-asset-id="${id}" data-image-alt="${esc(label)}">正在读取本地图片…</span>` : url ? `<button type="button" class="dil-load-image" data-image-url="${esc(url)}" data-image-alt="${esc(label)}">加载图片</button>` : '<span>图片未包含在存档中</span>';
+    return `<figure class="dil-image"><div class="dil-image-preview">${preview}</div><figcaption>${esc(label)}${source ? ` <a href="${esc(source)}">图片来源</a>` : ''}</figcaption></figure>`;
+  }
+  if (chatGPT) body = mapMarkdownText(body, prose => prose.replace(/\uE200image_group\uE202([\s\S]*?)\uE201/g, (raw, payload: string) => {
+    let request: Data;
+    try { request = data(JSON.parse(payload)); } catch { return '<span class="attachment-reference">图片组格式无法解析，原始内容已保留</span>'; }
+    const refs = Array.isArray(request.image_refs) ? request.image_refs : [];
+    const candidates = (ui?.content_references ?? []).filter(ref => ref.type === 'image_group');
+    const reference = candidates.find(ref => ref.matched_text === raw) ?? candidates.find(ref => Array.isArray(ref.refs) && ref.refs.some(value => {
+      const id = data(value); return refs.includes(`turn${id.turn_index}${id.ref_type}${id.ref_index}`);
+    }));
+    const images = Array.isArray(reference?.images) ? reference.images : [];
+    const html = images.length ? images.slice(0, 24).map(value => imageFigure(data(data(value).image_result ?? value))).join('') : '<span class="attachment-reference">图片组的地址未包含在存档中，可重新同步补充</span>';
+    groups.push(`<div class="chatgpt-image-group">${html}</div>`);
+    return `\n\n\uE000EVIMAGE${groups.length - 1}\uE001\n\n`;
+  }));
+  const sanitize = (html: string) => DOMPurify.sanitize(html.replace(/<p>(\uE000EVIMAGE\d+\uE001)<\/p>/g, '$1').replace(/\uE000EVIMAGE(\d+)\uE001/g, (_, index: string) => groups[Number(index)] ?? ''), { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
   const dil = ui?.model_dil_v2;
   if (!dil && !(chatGPT && /<\/?(?:box|row|grid|grid-item|text|title|caption|badge|AsyncImage|AsyncImageGroup|Entity|Cite|Link|AppBlock)\b|\{(?:@body|#each|#if)\b/.test(body))) return sanitize(marked.parse(body, { async: false }) as string);
   const tree = parts(body || dil?.fallbackMarkdown || '');
@@ -166,12 +188,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   }
   function image(attrs: Data, state: Data): string {
     const images = Array.isArray(state.images) ? state.images : [attrs];
-    return images.slice(0, 12).map(value => {
-      const item = data(value), url = safeRemoteURL(item.thumbnail_url ?? item.content_url ?? item.src ?? item.url);
-      const label = text(item.title ?? attrs.alt ?? attrs.query) || '回答中的图片';
-      const source = safeRemoteURL(item.url);
-      return `<figure class="dil-image"><div class="dil-image-preview">${url ? `<button type="button" class="dil-load-image" data-image-url="${esc(url)}" data-image-alt="${esc(label)}">加载图片</button>` : '<span>图片未包含在存档中</span>'}</div><figcaption>${esc(label)}${source ? ` <a href="${esc(source)}">图片来源</a>` : ''}</figcaption></figure>`;
-    }).join('');
+    return images.slice(0, 12).map(value => imageFigure(data(value), text(attrs.alt ?? attrs.query) || '回答中的图片')).join('');
   }
   function vector(nodes: Part[], context: Scope, depth: number): string {
     if (depth > 40 || count > 5000) { limited = true; return ''; }
@@ -265,10 +282,19 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   }
   const rendered = children(tree, scope, false);
   const note = limited ? '<div class="dil-note">部分交互或表达式以存档快照展示。</div>' : '';
-  return sanitize(`<div class="dil-response">${rendered}</div>${note}<details class="dil-source"><summary>${limited?'查看布局标记与未还原内容':'查看布局标记（正文已展示）'}</summary><pre><code>${esc(body || dil?.fallbackMarkdown || '')}</code></pre></details>`);
+  return sanitize(`<div class="dil-response">${rendered}</div>${note}<details class="dil-source"><summary>${limited?'查看布局标记与未还原内容':'查看布局标记（正文已展示）'}</summary><pre><code>${esc(original || dil?.fallbackMarkdown || '')}</code></pre></details>`);
 }
 
 export function decorateMessageImages(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>('.dil-local-image').forEach(node => {
+    const id = node.dataset.assetId;
+    if (!id || !/^[a-f0-9]{64}$/.test(id) || node.querySelector('img')) return;
+    const image = document.createElement('img'), link = document.createElement('a');
+    image.alt = node.dataset.imageAlt || '回答中的图片'; image.loading = 'lazy';
+    link.href = image.src = '/api/assets/' + id; link.target = '_blank'; link.rel = 'noopener';
+    image.onerror = () => { node.textContent = '本地图片读取失败，可重新同步补充'; };
+    link.append(image); node.replaceChildren(link);
+  });
   // Apply only validated CSS values after sanitization. Archived CSS, scripts,
   // event handlers and compiled component code are never evaluated.
   root.querySelectorAll<HTMLElement>('[data-dil-layout],[data-dil-presentation]').forEach(node=>{

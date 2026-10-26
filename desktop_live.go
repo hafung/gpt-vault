@@ -25,6 +25,12 @@ const desktopCheckpointPrefix = "desktop_capture_checkpoint:"
 //go:embed scripts/capture-chatgpt-desktop.ps1
 var desktopCaptureScript string
 
+//go:embed scripts/capture-chatgpt-images.js
+var desktopImagesScript string
+
+//go:embed scripts/capture-chatgpt-conversation.js
+var desktopConversationScript string
+
 //go:embed scripts/start-chatgpt-enhanced.ps1
 var desktopStartScript string
 
@@ -38,6 +44,7 @@ type desktopCheckpoint struct {
 	Cursor        string  `json:"cursor,omitempty"`
 	Streaming     bool    `json:"streaming,omitempty"`
 	MissingBodies int     `json:"missing_bodies,omitempty"`
+	ImagesAttempt float64 `json:"images_attempt,omitempty"`
 }
 
 type sessionSyncResult struct {
@@ -61,12 +68,14 @@ func desktopCaptureDue(checkpoint desktopCheckpoint, updated, timestamp float64)
 }
 
 type desktopCaptureJob struct {
-	ID         string `json:"id"`
-	Cursor     string `json:"cursor,omitempty"`
-	title      string
-	updated    float64
-	checkpoint desktopCheckpoint
-	priority   int
+	ID          string               `json:"id"`
+	Cursor      string               `json:"cursor,omitempty"`
+	KnownImages map[string]string    `json:"known_images,omitempty"`
+	Images      []desktopImageSource `json:"images,omitempty"`
+	title       string
+	updated     float64
+	checkpoint  desktopCheckpoint
+	priority    int
 }
 
 type desktopRecentConversation struct {
@@ -76,15 +85,17 @@ type desktopRecentConversation struct {
 }
 
 type desktopCaptureResult struct {
-	Kind         string                      `json:"kind"`
-	ID           string                      `json:"id"`
-	Complete     bool                        `json:"complete"`
-	Cursor       string                      `json:"cursor"`
-	Pages        int                         `json:"pages"`
-	Status       int                         `json:"status"`
-	Error        string                      `json:"error"`
-	Conversation M                           `json:"conversation"`
-	Recent       []desktopRecentConversation `json:"recent"`
+	Kind          string                      `json:"kind"`
+	ID            string                      `json:"id"`
+	Complete      bool                        `json:"complete"`
+	Cursor        string                      `json:"cursor"`
+	Pages         int                         `json:"pages"`
+	Status        int                         `json:"status"`
+	Error         string                      `json:"error"`
+	Conversation  M                           `json:"conversation"`
+	Recent        []desktopRecentConversation `json:"recent"`
+	Images        []desktopImage              `json:"images,omitempty"`
+	PendingImages int                         `json:"pending_images,omitempty"`
 }
 
 func desktopCaptureSupported() bool { return runtime.GOOS == "windows" || isWSL() }
@@ -126,7 +137,20 @@ func (i *Importer) desktopCaptureCandidates(full bool, timestamp float64, recent
 		json.Unmarshal([]byte(str(row["checkpoint"])), &checkpoint)
 		updated := number(row["updated"])
 		if !full && !desktopCaptureDue(checkpoint, updated, timestamp) {
-			continue
+			if checkpoint.RetryAfter > timestamp || timestamp-checkpoint.ImagesAttempt < 3600 {
+				continue
+			}
+			media, err := i.desktopImageJob(desktopCaptureJob{ID: id})
+			if err != nil {
+				return nil, err
+			}
+			pending := false
+			for _, source := range media.Images {
+				pending = pending || media.KnownImages[source.Reference] == ""
+			}
+			if !pending {
+				continue
+			}
 		}
 		cursor := checkpoint.Cursor
 		if full || checkpoint.Updated != updated || checkpoint.Complete {
@@ -322,7 +346,7 @@ func (i *Importer) saveDesktopCheckpoint(job desktopCaptureJob, checkpoint deskt
 }
 
 func readDesktopCapture(ctx context.Context, jobs []desktopCaptureJob, accept func(desktopCaptureResult) error) error {
-	input, err := json.Marshal(M{"port": desktopCapturePort, "jobs": jobs, "discover": jobs == nil})
+	input, err := json.Marshal(M{"port": desktopCapturePort, "jobs": jobs, "discover": jobs == nil, "images_script": desktopImagesScript, "conversation_script": desktopConversationScript})
 	if err != nil {
 		return err
 	}
@@ -457,7 +481,7 @@ func (i *Importer) importDesktopCapture(job desktopCaptureJob, result desktopCap
 	if updated < number(row["updated"]) {
 		updated = number(row["updated"])
 	}
-	if err = i.saveDesktopCheckpoint(job, desktopCheckpoint{Updated: updated, Attempt: now(), Complete: result.Complete, Cursor: result.Cursor, Streaming: streaming, MissingBodies: missingBodies}); err != nil {
+	if err = i.saveDesktopCheckpoint(job, desktopCheckpoint{Updated: updated, Attempt: now(), Complete: result.Complete, Cursor: result.Cursor, Streaming: streaming, MissingBodies: missingBodies, ImagesAttempt: job.checkpoint.ImagesAttempt}); err != nil {
 		return err
 	}
 	i.update(func(s *SyncStatus) {
@@ -554,7 +578,14 @@ func (i *Importer) discoverDesktopChats() []desktopRecentConversation {
 
 func (i *Importer) captureDesktopJobs(jobs []desktopCaptureJob, full, targeted bool) {
 	selected := map[string]desktopCaptureJob{}
-	for _, job := range jobs {
+	for index, job := range jobs {
+		var err error
+		job, err = i.desktopImageJob(job)
+		if err != nil {
+			i.issue(job.title, err, !targeted)
+			return
+		}
+		jobs[index] = job
 		selected[job.ID] = job
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Second)
@@ -577,6 +608,9 @@ func (i *Importer) captureDesktopJobs(jobs []desktopCaptureJob, full, targeted b
 		job, ok := selected[result.ID]
 		if !ok {
 			return errors.New("桌面读取助手返回了未请求的会话")
+		}
+		if result.Kind == "images" {
+			return i.importDesktopImages(job, result)
 		}
 		received[result.ID] = true
 		i.update(func(s *SyncStatus) { s.File = job.title })

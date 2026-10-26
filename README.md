@@ -69,16 +69,16 @@ Delete a conversation with the trash button beside its visibility button, then c
 An answer looked fine in ChatGPT, but its saved copy is missing a paragraph, an image, or half a recommendation card. GPT Vault supports ChatGPT's newer visual answers so those details remain readable when you revisit them.
 
 - **Keep the words and their layout.** Read recommendation cards, columns, tables, diagrams, and source links, including the prose inside cards.
-- **Keep track of images.** Image descriptions and source links remain available. Click to load an image; when the original record has none, a note explains what is missing.
+- **Keep images offline.** Supports `image_group` galleries and resolved visual answers. Desktop enhanced sync collects image bytes; archived pictures load locally, while uncollected images keep descriptions, source links, and a click-to-load option.
 - **Recover details in existing conversations.** On startup, GPT Vault restores omitted visual content from saved original records, even when the source is no longer available.
 
-Markdown, code blocks, and ordinary tables keep their familiar presentation. Sliders, forms, and other interactive content appear as static snapshots, with the original content available to inspect. Remote images require an internet connection to load.
+Markdown, code blocks, and ordinary tables keep their familiar presentation. Sliders, forms, and other interactive content appear as static snapshots, with the original content available to inspect. Uncollected remote images require an internet connection to load.
 
 ## Keep the history, even when the source changes
 
 Incremental sync skips unchanged files and collects new content while you keep reading. If a source file disappears, is truncated, or becomes unavailable, previously imported messages remain in your archive.
 
-Original records and earlier imported event versions are retained. Embedded images and readable local images are stored in the archive; missing attachments keep their references. Remote images are not downloaded automatically.
+Original records and earlier imported event versions are retained. Embedded images and readable local images are stored in the archive. With Desktop enhanced sync enabled, uploaded images, image groups, and resolved UI images are downloaded through Desktop and deduplicated in the same SQLite archive for offline reading and full backups. Unavailable images retain their references and can be retried on a later sync.
 
 ## Get started
 
