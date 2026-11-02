@@ -207,6 +207,10 @@ func (a *App) get(w http.ResponseWriter, r *http.Request) error {
 			data := v["payload"].([]byte)
 			w.Header().Set("Content-Type", str(v["mime"]))
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+			if name := r.URL.Query().Get("download"); name != "" {
+				w.Header().Set("Content-Disposition", fileDisposition(name))
+			}
 			_, e = w.Write(data)
 			return e
 		}

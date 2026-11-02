@@ -2,6 +2,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { staticValue, type Scope } from './dil-values';
 import { markdownLiteralEnd, mapMarkdownText } from './math';
+import { renderFileLinks, type FileAssets } from './chatgpt-files';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -106,10 +107,12 @@ function dedent(source: string): string {
   return lines.map(line => line.slice(Math.min(amount, /^ */.exec(line)![0].length))).join('\n').trim();
 }
 
-export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}): string {
+export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}, fileAssets: FileAssets = {}): string {
   const original = body, groups: string[] = [];
   function imageFigure(item: Data, fallback = '回答中的图片'): string {
     const urls = [item.content_url, item.original_content_url, item.thumbnail_url, item.src, item.url];
+    const sandbox = urls.find(value => typeof value === 'string' && value.startsWith('sandbox:/'));
+    if (sandbox) return `<figure class="dil-image"><img src="${esc(sandbox)}" alt="${esc(text(item.title ?? item.alt) || fallback)}"></figure>`;
     const url = urls.map(safeRemoteURL).find(Boolean);
     const id = urls.map(value => imageAssets[text(value)]).find(value => /^[a-f0-9]{64}$/.test(value ?? ''));
     const label = text(item.title ?? item.alt) || fallback, source = safeRemoteURL(item.url);
@@ -129,7 +132,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     groups.push(`<div class="chatgpt-image-group">${html}</div>`);
     return `\n\n\uE000EVIMAGE${groups.length - 1}\uE001\n\n`;
   }));
-  const sanitize = (html: string) => DOMPurify.sanitize(html.replace(/<p>(\uE000EVIMAGE\d+\uE001)<\/p>/g, '$1').replace(/\uE000EVIMAGE(\d+)\uE001/g, (_, index: string) => groups[Number(index)] ?? ''), { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
+  const sanitize = (html: string) => DOMPurify.sanitize(renderFileLinks(html.replace(/<p>(\uE000EVIMAGE\d+\uE001)<\/p>/g, '$1').replace(/\uE000EVIMAGE(\d+)\uE001/g, (_, index: string) => groups[Number(index)] ?? ''), fileAssets), { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
   const dil = ui?.model_dil_v2;
   if (!dil && !(chatGPT && /<\/?(?:box|row|grid|grid-item|text|title|caption|badge|AsyncImage|AsyncImageGroup|Entity|Cite|Link|AppBlock)\b|\{(?:@body|#each|#if)\b/.test(body))) return sanitize(marked.parse(body, { async: false }) as string);
   const tree = parts(body || dil?.fallbackMarkdown || '');
@@ -256,7 +259,11 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     if (name === 'divider' || name === 'separator') return '<hr>';
     const content = children(node.children, context, true, depth);
     const inner = content.replace(/^<p>([\s\S]*)<\/p>\n?$/, '$1');
-    if (name === 'link') { const url = safeRemoteURL(a.url ?? a.href); return url ? `<a href="${esc(url)}">${inner || esc(a.title ?? url)}</a>` : inner || esc(a.title); }
+    if (name === 'link') {
+      const state = getState(name), target = a.url ?? a.href ?? state.url;
+      const url = typeof target === 'string' && target.startsWith('sandbox:/') ? target : safeRemoteURL(target);
+      return url ? `<a href="${esc(url)}">${inner || esc(a.title ?? state.title ?? url)}</a>` : inner || esc(a.title ?? state.title);
+    }
     if (name === 'bold' || name === 'italic' || name === 'badge') { const tag = name === 'bold' ? 'strong' : name === 'italic' ? 'em' : 'span'; return `<${tag} class="dil-${name}">${inner}</${tag}>`; }
     const presentation = ` data-dil-presentation="${esc(JSON.stringify(Object.fromEntries(['color','weight','size','tabularNums'].filter(key=>a[key] !== undefined).map(key=>[key,a[key]]))))}"`;
     if (name === 'title') return `<h3 class="dil-title"${presentation}>${inner}</h3>`;

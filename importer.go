@@ -1306,6 +1306,7 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 				return 0, err
 			}
 			preserveChatGPTImages(meta, old)
+			preserveChatGPTFiles(meta, old)
 		} else if !errors.Is(err, errNotFound) {
 			return 0, err
 		}

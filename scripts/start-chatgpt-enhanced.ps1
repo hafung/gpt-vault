@@ -11,17 +11,26 @@ try {
         }
     }
     if (!$executable) { throw 'ChatGPT Desktop installation was not found.' }
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
     $ready = $false
-    if ($listeners.Count) {
-        if (@($listeners | Where-Object LocalAddress -notin @('127.0.0.1','::1')).Count) { throw 'The capture port must listen only on localhost.' }
+    $availablePort = $null
+    foreach ($candidatePort in @(19222,19223)) {
+        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $candidatePort -ErrorAction SilentlyContinue)
+        if (!$listeners.Count) {
+            if ($null -eq $availablePort) { $availablePort = $candidatePort }
+            continue
+        }
+        if (@($listeners | Where-Object LocalAddress -notin @('127.0.0.1','::1')).Count) { continue }
         $owner = Get-CimInstance Win32_Process | Where-Object ProcessId -eq $listeners[0].OwningProcess
-        if ($owner.ExecutablePath -ne $executable) { throw 'The capture port is occupied by another application.' }
-        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$port/json/version" -TimeoutSec 3
-        $ready = !!$version.webSocketDebuggerUrl
+        if ($owner.ExecutablePath -ne $executable) { continue }
+        try {
+            $version = Invoke-RestMethod -Uri "http://127.0.0.1:$candidatePort/json/version" -TimeoutSec 3
+            if ($version.webSocketDebuggerUrl) { $port=$candidatePort; $ready=$true; break }
+        } catch { }
     }
+    if (!$ready -and $null -ne $availablePort) { $port=$availablePort }
     if ($Check) { @{installed=$true;running=($main.Count -gt 0);ready=$ready;port=$port} | ConvertTo-Json -Compress;exit 0 }
     if ($ready) { Write-Host 'ChatGPT Desktop enhanced sync is already available.'; exit 0 }
+    if ($null -eq $availablePort) { throw 'Both local capture ports are occupied or unresponsive. No unrelated application was stopped.' }
     if ($main.Count) {
         if (!$Restart) { throw 'Exit ChatGPT Desktop from its tray icon first, or run this script with -Restart.' }
         Write-Host 'Restarting ChatGPT Desktop for enhanced sync...'

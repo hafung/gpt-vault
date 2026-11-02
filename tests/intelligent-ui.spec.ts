@@ -25,6 +25,23 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
   await expect(page.locator('.prose')).toBeVisible();
 }
 
+test('sandbox Markdown downloads and storyboard pictures use archived bytes and readable names', async ({page}) => {
+  const ref='sandbox:/workspace/scratch/珍珠奶茶_提示词.md', image='sandbox:/workspace/scratch/board.png';
+  const docId='b'.repeat(64), imageId='c'.repeat(64);
+  const body=`<box>\n\n[下载完整制作脚本（Markdown）](sandbox:/workspace/scratch/${encodeURIComponent('珍珠奶茶_提示词.md')})\n\n![分镜图](${image})\n\n<Link url="${ref}" title="完整脚本"/>\n\n[失效文件](sandbox:/mnt/data/expired.md)\n\n</box>`;
+  await fixture(page,body,{assets:[docId,imageId],file_assets:{[ref]:{id:docId,name:'珍珠奶茶_提示词.md',mime:'text/plain'},[image]:{id:imageId,name:'board.png',mime:'image/png'}}},true,body+'\n\n完整内容');
+  await expect(page.getByRole('link',{name:'下载完整制作脚本（Markdown）',exact:true})).toHaveAttribute('href','/api/assets/'+docId);
+  await expect(page.getByRole('link',{name:'完整脚本',exact:true})).toHaveAttribute('href','/api/assets/'+docId);
+  await expect(page.locator('a[download]').filter({hasText:'下载'}).first()).toHaveAttribute('download','珍珠奶茶_提示词.md');
+  await expect(page.locator('.dil-local-image img')).toHaveAttribute('src','/api/assets/'+imageId);
+  await expect(page.locator('.attachment-reference')).toContainText('文件尚未归档');
+  await expect(page.locator('.image-link')).toHaveCount(0);
+  await expect(page.locator('.local-path-link')).toHaveCount(0);
+  await page.locator('.expand-message').click();
+  await expect(page.getByRole('link',{name:'下载完整制作脚本（Markdown）',exact:true})).toHaveAttribute('href','/api/assets/'+docId);
+  await expect(page.locator('.prose')).toContainText('完整内容');
+});
+
 test('nested DIL keeps prose, inline entities, links, citations, loops and tables', async ({ page }) => {
   const body = `# 推荐\n\n<box border padding={3}>\n  **第二选择：**\n\n  如果核心功能是声音克隆、AI 角色配音，特别是克隆声音之后还能控制人物的语气情绪，那么我甚至会反过来优先选它。\n\n  **<Entity value="声音平台"/>**，<Link url="https://example.com/voice" title="官方网站"/>。<Cite refs={["turn1search0"]}/>\n  <grid columns={2}>\n    {#each [{name:"声音克隆",desc:"角色配音"},{name:"情绪控制",desc:"语气调整"}] as item, i}\n      <grid-item>\n        <text>{item.name}</text>\n        <caption>{item.desc}</caption>\n      </grid-item>\n    {/each}\n  </grid>\n  <table><table-row><table-cell header>功能</table-cell><table-cell>保留内容</table-cell></table-row></table>\n</box>\n\n普通 **Markdown** 与 [外链](https://example.com)。\n\n\`\`\`xml\n<box>代码内的组件不应解析</box>\n\`\`\`\n\n行内代码 \`<Entity value="原样保留"/>\`。`;
   await fixture(page, body, { chatgpt_ui: { model_dil_v2: { appData: { opGenui: { componentResults: { cite: { componentName: 'Cite', state: { items: [{ url: 'https://example.com/source', title: '来源页面' }] } } } } } } } });

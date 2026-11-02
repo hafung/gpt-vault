@@ -72,6 +72,8 @@ type desktopCaptureJob struct {
 	Cursor      string               `json:"cursor,omitempty"`
 	KnownImages map[string]string    `json:"known_images,omitempty"`
 	Images      []desktopImageSource `json:"images,omitempty"`
+	Files       []desktopFileSource  `json:"files,omitempty"`
+	KnownFiles  map[string]string    `json:"known_files,omitempty"`
 	title       string
 	updated     float64
 	checkpoint  desktopCheckpoint
@@ -96,6 +98,8 @@ type desktopCaptureResult struct {
 	Recent        []desktopRecentConversation `json:"recent"`
 	Images        []desktopImage              `json:"images,omitempty"`
 	PendingImages int                         `json:"pending_images,omitempty"`
+	Files         []desktopFile               `json:"files,omitempty"`
+	PendingFiles  int                         `json:"pending_files,omitempty"`
 }
 
 func desktopCaptureSupported() bool { return runtime.GOOS == "windows" || isWSL() }
@@ -147,6 +151,9 @@ func (i *Importer) desktopCaptureCandidates(full bool, timestamp float64, recent
 			pending := false
 			for _, source := range media.Images {
 				pending = pending || media.KnownImages[source.Reference] == ""
+			}
+			for _, source := range media.Files {
+				pending = pending || media.KnownFiles[source.Reference] == ""
 			}
 			if !pending {
 				continue
@@ -610,7 +617,10 @@ func (i *Importer) captureDesktopJobs(jobs []desktopCaptureJob, full, targeted b
 			return errors.New("桌面读取助手返回了未请求的会话")
 		}
 		if result.Kind == "images" {
-			return i.importDesktopImages(job, result)
+			if err := i.importDesktopImages(job, result); err != nil {
+				return err
+			}
+			return i.importDesktopFiles(job, result)
 		}
 		received[result.ID] = true
 		i.update(func(s *SyncStatus) { s.File = job.title })

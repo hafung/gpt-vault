@@ -1,7 +1,14 @@
 // Evaluated only inside the verified, logged-in Desktop page. Native download
-// headers never cross CDP; only validated image bytes leave the page.
+// headers never cross CDP; only file bytes and original references leave the page.
 (async ({job, conversation, bindings, deadline, budget}) => {
   const sources = new Map(), known = job.known_images || {};
+  const files = new Map(), knownFiles = job.known_files || {};
+  const addFile = (reference, message_id) => {
+    if (typeof reference !== 'string' || !reference.startsWith('sandbox:/') || reference.startsWith('sandbox://')) return;
+    try { reference = 'sandbox:' + decodeURIComponent(reference.slice(8)); } catch { return; }
+    if (reference.length > 4104 || /[\x00\r\n\\]/.test(reference) || !message_id) return;
+    if (!knownFiles[reference] && !files.has(reference)) files.set(reference, {reference, message_id});
+  };
   const add = (reference, urls = []) => {
     if (reference && !known[reference] && !sources.has(reference)) sources.set(reference, {reference, urls});
   };
@@ -16,17 +23,44 @@
     for (const child of Object.values(value)) visit(child, depth + 1);
   };
   for (const source of job.images || []) add(source.reference, source.urls);
+  // Job references have already been decoded once by the archive.
+  for (const source of job.files || []) {
+    if (!knownFiles[source.reference]) files.set(source.reference, source);
+  }
   for (const message of conversation?.messages || []) {
     visit(message.content);
     for (const key of ['content_references', 'model_dil_v2']) visit(message.metadata?.[key]);
+    const scan = (value, depth = 0) => {
+      if (depth > 40 || value == null) return;
+      if (typeof value === 'string') {
+        for (const match of value.matchAll(/sandbox:\/[^\s<>"`)\]]+/g)) addFile(match[0], message.id);
+      } else if (Array.isArray(value)) value.forEach(v => scan(v, depth + 1));
+      else if (typeof value === 'object') Object.values(value).forEach(v => scan(v, depth + 1));
+    };
+    scan(message.content);
+    scan(message.metadata?.model_dil_v2?.appData);
   }
-  const items = [];
+  const items = [], fileItems = [];
   let bytes = 0;
-  if (!sources.size) return JSON.stringify({kind:'images', id:job.id, images:[], pending_images:0, bytes});
+  if (!sources.size && !files.size) return JSON.stringify({kind:'images', id:job.id, images:[], files:[], pending_images:0, pending_files:0, bytes});
   try {
-    if (location.origin !== 'app://-' || !bindings?.module || !bindings.download || !bindings.resolver) throw Error('Image module unavailable');
+    if (location.origin !== 'app://-' || !bindings?.module || !bindings.download) throw Error('Download module unavailable');
     const native = await import(bindings.module);
-    const context = native[bindings.resolver](job.id);
+    const encode = blob => new Promise((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob);
+    });
+    for (const source of [...files.values()].slice(0, 24)) {
+      if (!bindings.sandbox || deadline - Date.now() < 1500 || budget - bytes < 1024) break;
+      try {
+        const signal = AbortSignal.timeout(Math.min(10000, deadline - Date.now() - 500));
+        const limit = Math.min(8 * 1024 * 1024, budget - bytes);
+        const target = await native[bindings.sandbox]({conversationId:job.id, messageId:source.message_id, sandboxPath:source.reference.slice(8), signal});
+        const blob = await native[bindings.download](target, signal, limit);
+        if (!blob || blob.size > limit) continue;
+        fileItems.push({reference:source.reference, data:await encode(blob)}); bytes += blob.size;
+      } catch { /* Expired files retain their original references for later retry. */ }
+    }
+    const context = bindings.resolver ? native[bindings.resolver](job.id) : null;
     for (const source of [...sources.values()].slice(0, 24)) {
       if (deadline - Date.now() < 1500 || budget - bytes < 1024) break;
       const signal = AbortSignal.timeout(Math.min(10000, deadline - Date.now() - 500));
@@ -50,12 +84,10 @@
           }
         }
         if (!blob || !blob.size || blob.size > limit || !blob.type.startsWith('image/')) continue;
-        const data = await new Promise((resolve, reject) => {
-          const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob);
-        });
+        const data = await encode(blob);
         items.push({reference:source.reference, data}); bytes += blob.size;
       } catch { /* A missing image never prevents text or other images from syncing. */ }
     }
   } catch { /* Unsupported Desktop builds retain references and can retry later. */ }
-  return JSON.stringify({kind:'images', id:job.id, images:items, pending_images:sources.size-items.length, bytes});
+  return JSON.stringify({kind:'images', id:job.id, images:items, files:fileItems, pending_images:sources.size-items.length, pending_files:files.size-fileItems.length, bytes});
 })

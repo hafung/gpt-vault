@@ -107,7 +107,7 @@ func (i *Importer) desktopImageJob(job desktopCaptureJob) (desktopCaptureJob, er
 			}
 		}
 	}
-	return job, nil
+	return i.desktopFileJob(job)
 }
 
 func (i *Importer) importDesktopImages(job desktopCaptureJob, result desktopCaptureResult) error {

@@ -70,6 +70,7 @@ An answer looked fine in ChatGPT, but its saved copy is missing a paragraph, an 
 
 - **Keep the words and their layout.** Read recommendation cards, columns, tables, diagrams, and source links, including the prose inside cards.
 - **Keep images offline.** Supports `image_group` galleries and resolved visual answers. Desktop enhanced sync collects image bytes; archived pictures load locally, while uncollected images keep descriptions, source links, and a click-to-load option.
+- **Archive generated files.** Desktop enhanced sync downloads accessible `sandbox:` Markdown files, documents, and storyboard pictures, preserving Unicode filenames for local viewing, downloads, and full backups. Files that are no longer accessible keep an explanation and can be retried. Files are limited to 8 MiB each, within a shared 16 MiB attachment budget per batch.
 - **Recover details in existing conversations.** On startup, GPT Vault restores omitted visual content from saved original records, even when the source is no longer available.
 
 Markdown, code blocks, and ordinary tables keep their familiar presentation. Sliders, forms, and other interactive content appear as static snapshots, with the original content available to inspect. Uncollected remote images require an internet connection to load.
