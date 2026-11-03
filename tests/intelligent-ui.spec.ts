@@ -22,8 +22,18 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
     return route.fulfill({ json: {} });
   });
   await page.goto('/?session=dil-fixture');
-  await expect(page.locator('.prose')).toBeVisible();
+  await expect(page.locator('.message')).toBeVisible();
 }
+
+test('image-only GPT replies display archived generated pictures without expanding tools', async ({page}) => {
+  const id = 'd'.repeat(64);
+  await fixture(page, '', {source_role:'tool', assets:[id], image_assets:{'sediment://generated':id}});
+  await expect(page.locator('.message.assistant .message-heading b')).toHaveText('GPT');
+  await expect(page.locator('.message.assistant .image-link img')).toBeVisible();
+  await expect.poll(()=>page.locator('.image-link img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+  await expect(page.locator('.message .technical')).toHaveCount(0);
+  await expect(page.locator('.attachment-reference')).toHaveCount(0);
+});
 
 test('sandbox Markdown downloads and storyboard pictures use archived bytes and readable names', async ({page}) => {
   const ref='sandbox:/workspace/scratch/珍珠奶茶_提示词.md', image='sandbox:/workspace/scratch/board.png';

@@ -2,7 +2,7 @@
   const job=__JOB__, deadline=__DEADLINE__;
   let conversation=null, cursor=null, pages=0;
   const messages=new Map();
-  const hasContent=m=>(m.content?.parts||[]).some(p=>typeof p==='string'&&p.trim()||typeof p?.text==='string'&&p.text.trim())||Boolean(m.content?.text?.trim())||Boolean(m.content?.thoughts?.length)||Boolean(m.metadata?.model_dil_v2)||Boolean(m.metadata?.genui_components?.length);
+  const hasContent=m=>(m.content?.parts||[]).some(p=>typeof p==='string'&&p.trim()||typeof p?.text==='string'&&p.text.trim()||p?.asset_pointer||p?.image_asset_pointer?.asset_pointer)||Boolean(m.content?.text?.trim())||Boolean(m.content?.content)||Boolean(m.content?.thoughts?.length)||Boolean(m.metadata?.model_dil_v2)||Boolean(m.metadata?.genui_components?.length);
   const merge=m=>{const previous=messages.get(m.id);if(!previous||!hasContent(previous)&&hasContent(m))messages.set(m.id,m)};
   const done=()=>JSON.stringify({kind:'conversation',id:job.id,complete:!cursor,cursor:cursor||'',pages,
     conversation:{...conversation,messages:[...messages.values()],

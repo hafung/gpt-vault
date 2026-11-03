@@ -1165,7 +1165,15 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 		if !ok {
 			return 0, errors.New("ChatGPT 缓存缺少 mapping 或 messages")
 		}
+		messages = append([]any{}, messages...)
+		sort.SliceStable(messages, func(a, b int) bool {
+			return stamp(obj(messages[a])["create_time"]) < stamp(obj(messages[b])["create_time"])
+		})
 		nodes := M{}
+		messageIDs := map[string]bool{}
+		for _, value := range messages {
+			messageIDs[str(obj(value)["id"])] = true
+		}
 		previous := ""
 		for _, value := range messages {
 			m := obj(value)
@@ -1174,6 +1182,11 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 				return 0, errors.New("ChatGPT 缓存消息缺少 ID")
 			}
 			parent := first(obj(m["metadata"])["parent_id"], previous)
+			// Desktop omits hidden nodes from its linear message list. A parent
+			// pointing at one of those nodes must not sever the visible history.
+			if !messageIDs[str(parent)] {
+				parent = previous
+			}
 			nodes[id] = M{"message": m, "parent": parent}
 			previous = id
 		}
@@ -1266,17 +1279,8 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 		if len(m) == 0 {
 			continue
 		}
-		role := str(obj(m["author"])["role"])
-		if role != "user" && role != "assistant" && role != "tool" {
-			role = "context"
-		}
+		role := chatGPTMessageRole(m)
 		content := obj(m["content"])
-		if role == "assistant" && (str(content["content_type"]) == "thoughts" || str(content["content_type"]) == "reasoning_recap") {
-			role = "reasoning"
-		}
-		if obj(m["metadata"])["is_visually_hidden_from_conversation"] == true {
-			role = "context"
-		}
 		body := textContent(content["parts"])
 		if body == "" {
 			body = str(content["text"])
@@ -1300,6 +1304,7 @@ func (i *Importer) chatgptConversation(c M, path string, generation int64, full 
 			return 0, e
 		}
 		meta := M{"branch": len(active) > 0 && !active[nid], "parent": node["parent"], "assets": assets, "node_id": nid}
+		meta["source_role"], meta["recipient"], meta["channel"] = obj(m["author"])["role"], m["recipient"], m["channel"]
 		var old M
 		if previous, err := one(tx, "SELECT metadata FROM messages WHERE session_id=? AND identity=?", sid, "node:"+nid); err == nil {
 			if err = json.Unmarshal([]byte(str(previous["metadata"])), &old); err != nil {

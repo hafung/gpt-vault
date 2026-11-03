@@ -568,6 +568,9 @@ func main() {
 	if err = store.recoverChatGPTUI(); err != nil {
 		log.Fatal("恢复 ChatGPT 界面数据: ", err)
 	}
+	if err = store.recoverChatGPTRoles(); err != nil {
+		log.Fatal("恢复 ChatGPT 图片回复: ", err)
+	}
 	if *syncOnly {
 		importer.update(func(s *SyncStatus) {
 			*s = SyncStatus{Running: true, Started: now(), Errors: []Issue{}, Warnings: []Issue{}}

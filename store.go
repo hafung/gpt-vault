@@ -323,14 +323,14 @@ func (s *Store) message(db DBQuery, sid, identity string, pos int64, role, body 
 		return false, nil
 	}
 	digest := hash([]byte(body))
-	previous, err := one(db, "SELECT id,body_hash,metadata FROM messages WHERE session_id=? AND identity=?", sid, identity)
+	previous, err := one(db, "SELECT id,body_hash,metadata,role,kind,phase FROM messages WHERE session_id=? AND identity=?", sid, identity)
 	if err != nil && !errors.Is(err, errNotFound) {
 		return false, err
 	}
 	metaJSON := jsonText(metadata)
-	if previous != nil && str(previous["body_hash"]) == digest {
-		if str(previous["metadata"]) != metaJSON {
-			_, err = db.Exec("UPDATE messages SET metadata=? WHERE id=?", metaJSON, previous["id"])
+	if previous != nil && str(previous["body_hash"]) == digest && str(previous["role"]) == role {
+		if str(previous["metadata"]) != metaJSON || str(previous["kind"]) != kind || str(previous["phase"]) != phase {
+			_, err = db.Exec("UPDATE messages SET metadata=?,kind=?,phase=? WHERE id=?", metaJSON, kind, phase, previous["id"])
 		}
 		return false, err
 	}
@@ -338,7 +338,7 @@ func (s *Store) message(db DBQuery, sid, identity string, pos int64, role, body 
 	var id int64
 	if previous != nil {
 		id = integer(previous["id"])
-		_, err = db.Exec("UPDATE messages SET body=?,body_hash=?,preview=?,metadata=?,phase=? WHERE id=?", pack([]byte(body)), digest, preview, metaJSON, phase, id)
+		_, err = db.Exec("UPDATE messages SET body=?,body_hash=?,preview=?,metadata=?,phase=?,role=?,kind=? WHERE id=?", pack([]byte(body)), digest, preview, metaJSON, phase, role, kind, id)
 		if err != nil {
 			return false, err
 		}
