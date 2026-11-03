@@ -25,6 +25,101 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
   await expect(page.locator('.message')).toBeVisible();
 }
 
+const marker = (kind: string, payload: string) => `\uE200${kind}\uE202${payload}\uE201`;
+const industryChart = {
+  chartType: 'pie', meta: { title: '2025 年中国 GDP 三次产业结构', description: 'GDP 140.19 万亿元，按三次产业增加值划分。', footer: '数据：国家统计局，2025 年国民经济和社会发展统计公报' },
+  nameKey: 'industry', valueKey: 'gdp', series: [{ dataKey: 'gdp', label: '增加值', valueFormat: 'raw', valueSuffix: ' 万亿元' }],
+  data: [{ industry: '第一产业', gdp: 9.33 }, { industry: '第二产业', gdp: 49.97 }, { industry: '第三产业', gdp: 80.89 }],
+};
+
+test('industry overview renders genui pie data and citations using archived matched_text', async ({ page }) => {
+  const cite = marker('cite', 'turn121943view0'), other = marker('cite', 'turn121943view1');
+  const chart = marker('genui', JSON.stringify({ chart: industryChart }));
+  const url = 'https://www.stats.gov.cn/sj/zxfb/202602/t20260228_1962662.html';
+  const metadata = { chatgpt_ui: { content_references: [
+    // Archived turn indexes differ from the opaque IDs in the answer.
+    { matched_text: cite, type: 'grouped_webpages', items: [{ url, title: '国家统计局公报', refs: [{ turn_index: 2, ref_type: 'view', ref_index: 0 }] }] },
+    { matched_text: other, type: 'grouped_webpages', items: [{ url, title: '国家统计局公报', refs: [{ turn_index: 2, ref_type: 'view', ref_index: 1 }] }] },
+  ] } };
+  const body = `# 中国行业数据总览\n\n三次产业。${cite}\n\n${chart}\n\n后续 **行业正文**。${other}\n\n| 指标 | 来源 |\n|---|---|\n| GDP | ${cite} |`;
+  await fixture(page, body, metadata, true, body + '\n\n完整内容。');
+  for (const expanded of [false, true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    await expect(page.locator('.genui-chart')).toHaveCount(1);
+    await expect(page.locator('.genui-pie path')).toHaveCount(3);
+    await expect(page.locator('.genui-swatch circle')).toHaveCount(3);
+    for (let i = 0; i < 3; i++) expect(await page.locator('.genui-swatch circle').nth(i).getAttribute('fill')).toBe(await page.locator('.genui-pie path').nth(i).getAttribute('fill'));
+    await expect(page.locator('.genui-chart tbody tr')).toHaveCount(3);
+    await expect(page.locator('.genui-chart td')).toHaveText(['9.33 万亿元', '49.97 万亿元', '80.89 万亿元']);
+    await expect(page.locator('.genui-chart figcaption')).toContainText(industryChart.meta.description);
+    await expect(page.locator('.genui-footer')).toHaveText(industryChart.meta.footer);
+    await expect(page.locator('.dil-citations a')).toHaveCount(3);
+    for (const link of await page.locator('.dil-citations a').all()) {
+      await expect(link).toHaveAttribute('href', url);
+      await expect(link).toHaveText('[1]');
+    }
+    await expect(page.locator('.prose > table td .dil-citations a')).toHaveCount(1);
+    await expect(page.locator('.prose strong').filter({ hasText: '行业正文' })).toHaveCount(1);
+    await expect(page.locator('.prose')).not.toContainText('\uE200');
+  }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  }
+});
+
+test('genui bar charts coexist with nested DIL, image groups, TeX and literal code', async ({ page }) => {
+  const chart = marker('genui', JSON.stringify({ chart: {
+    chartType: 'bar', layout: 'vertical', xKey: 'partner', meta: { title: '2025 年中国主要贸易伙伴' },
+    series: [{ dataKey: 'trade', label: '贸易额', valueSuffix: ' 万亿元' }],
+    data: [{ partner: '东盟', trade: 7.546 }, { partner: '欧盟', trade: 5.925 }, { partner: '美国', trade: 4.007 }],
+  } }));
+  const cite = marker('cite', 'turn1view0'), image = marker('image_group', '{"image_refs":[]}');
+  await fixture(page, `<box>\n正文 ${cite}\n\n${chart}\n\n${image}\n\n\\(x^2\\)\n</box>\n\n\`\`\`text\n${chart}\n${cite}\n\`\`\`\n\n\`${cite}\``, {
+    chatgpt_ui: { search_result_groups: [{ entries: [{ ref_id: { turn_index: 1, ref_type: 'view', ref_index: 0 }, url: 'https://example.com/source' }] }] },
+  });
+  await expect(page.locator('.dil-response .genui-bars rect')).toHaveCount(3);
+  await expect(page.locator('.genui-chart td')).toHaveText(['7.546 万亿元', '5.925 万亿元', '4.007 万亿元']);
+  const bars = page.locator('.genui-bars rect');
+  expect(Number(await bars.nth(0).getAttribute('width'))).toBeGreaterThan(Number(await bars.nth(1).getAttribute('width')));
+  await expect(page.locator('.dil-citations a')).toHaveAttribute('href', 'https://example.com/source');
+  await expect(page.locator('.chatgpt-image-group')).toHaveCount(1);
+  await expect(page.locator('.dil-response math')).toHaveCount(1);
+  await expect(page.locator('.dil-response pre code')).toHaveText(`${chart}\n${cite}\n`);
+  await expect(page.locator('.dil-response p code')).toHaveText(cite);
+  await expect(page.locator('.dil-note')).toHaveCount(0);
+});
+
+test('missing or hostile genui and citation data preserve content without executing markup', async ({ page }) => {
+  const bad = marker('genui', '{broken'), unknown = marker('genui', '{"widget":"unknown"}');
+  const hostile = marker('genui', JSON.stringify({ chart: { ...industryChart, meta: { title: '<img src=x onerror="window.xss=1">' }, data: [{ industry: '<script>window.xss=1</script>', gdp: 1 }] } }));
+  const cite = marker('cite', 'turnMissingview0');
+  await fixture(page, `${bad}\n\n${unknown}\n\n${hostile}\n\n末尾 **保留**。${cite}`, {
+    chatgpt_ui: { content_references: [{ matched_text: cite, items: [{ url: 'javascript:alert(1)', title: '危险' }] }] },
+  });
+  await expect(page.locator('.genui-fallback')).toHaveCount(2);
+  await expect(page.locator('.genui-fallback pre code')).toHaveText([bad, unknown]);
+  await expect(page.locator('.genui-pie circle')).toHaveCount(1);
+  await expect(page.locator('.genui-chart figcaption')).toHaveText('<img src=x onerror="window.xss=1">');
+  await expect(page.locator('.prose')).toContainText('末尾 保留');
+  await expect(page.locator('.dil-citations')).toHaveText('[来源未归档]');
+  await expect(page.locator('.prose img,.prose script,.prose [onerror],.prose a[href^="javascript:"]')).toHaveCount(0);
+  expect(await page.evaluate(() => 'xss' in window)).toBeFalsy();
+});
+
+test('resolved widget metadata restores missing chart payloads and unsupported visuals retain exact data', async ({ page }) => {
+  const resolved = marker('genui', '{"chart":{"id":"resolved"}}');
+  const unsupported = marker('genui', JSON.stringify({ chart: { ...industryChart, chartType: 'future-chart' } }));
+  await fixture(page, `${resolved}\n\n${unsupported}\n\n后续正文。`, { chatgpt_ui: { content_references: [
+    { matched_text: resolved, type: 'client_defined_widget', data: { widget_type: 'charts_widget_v2', content: industryChart } },
+  ] } });
+  await expect(page.locator('.genui-chart')).toHaveCount(2);
+  await expect(page.locator('.genui-pie')).toHaveCount(1);
+  await expect(page.locator('.genui-chart').last().locator('td')).toHaveText(['9.33 万亿元', '49.97 万亿元', '80.89 万亿元']);
+  await expect(page.locator('.genui-fallback')).toHaveCount(0);
+  await expect(page.locator('.prose')).toContainText('后续正文。');
+});
+
 test('image-only GPT replies display archived generated pictures without expanding tools', async ({page}) => {
   const id = 'd'.repeat(64);
   await fixture(page, '', {source_role:'tool', assets:[id], image_assets:{'sediment://generated':id}});

@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify';
 import { staticValue, type Scope } from './dil-values';
 import { markdownLiteralEnd, mapMarkdownText } from './math';
 import { renderFileLinks, type FileAssets } from './chatgpt-files';
+import { renderChatGPTMarkers } from './chatgpt-markers';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -132,6 +133,11 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     groups.push(`<div class="chatgpt-image-group">${html}</div>`);
     return `\n\n\uE000EVIMAGE${groups.length - 1}\uE001\n\n`;
   }));
+  if (chatGPT) body = renderChatGPTMarkers(body, ui, (html, block) => {
+    groups.push(html);
+    const marker = `\uE000EVIMAGE${groups.length - 1}\uE001`;
+    return block ? `\n\n${marker}\n\n` : marker;
+  });
   const sanitize = (html: string) => DOMPurify.sanitize(renderFileLinks(html.replace(/<p>(\uE000EVIMAGE\d+\uE001)<\/p>/g, '$1').replace(/\uE000EVIMAGE(\d+)\uE001/g, (_, index: string) => groups[Number(index)] ?? ''), fileAssets), { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
   const dil = ui?.model_dil_v2;
   if (!dil && !(chatGPT && /<\/?(?:box|row|grid|grid-item|text|title|caption|badge|AsyncImage|AsyncImageGroup|Entity|Cite|Link|AppBlock)\b|\{(?:@body|#each|#if)\b/.test(body))) return sanitize(marked.parse(body, { async: false }) as string);
