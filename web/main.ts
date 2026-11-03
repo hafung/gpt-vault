@@ -696,6 +696,28 @@ async function reloadCurrentReader() {
   await openSession(state.id, anchor ? Number(anchor.dataset.mid) : undefined, false, state.page?.offset || 0);
 }
 
+async function refreshSyncedSessionCard(id: string) {
+  if (state.loading || !state.items.some(item => item.id === id)) return;
+  const version = listVersion;
+  const session = state.session?.id === id ? state.session
+    : (await api<Page>('/sessions/' + encodeURIComponent(id) + '?' + new URLSearchParams({limit:'1',hidden:state.showHidden?'1':''}))).session;
+  // A filter change or another list request takes ownership of the list.
+  if (version !== listVersion || state.loading) return;
+  const index = state.items.findIndex(item => item.id === id);
+  const list = $('#conversation-list');
+  const card = list.querySelector<HTMLButtonElement>(`.conversation-card[data-id="${CSS.escape(id)}"]`);
+  if (index < 0 || !card) return;
+  const updated = {...state.items[index], ...session};
+  state.items[index] = updated;
+  const fragment = document.createElement('template'); fragment.innerHTML = rowHTML(updated);
+  const replacement = fragment.content.firstElementChild as HTMLButtonElement;
+  replacement.onclick = () => openSession(updated.id, updated.match_id || undefined, true);
+  const scrollTop = list.scrollTop, focused = document.activeElement === card;
+  card.replaceWith(replacement);
+  list.scrollTop = scrollTop;
+  if (focused) replacement.focus({preventScroll:true});
+}
+
 async function startSync(full = false, automatic = false) {
   if(syncStarting || state.sync?.running)return;
   syncStarting = true;
@@ -721,7 +743,21 @@ async function pollSync() {
   try { const previous=state.sync;const report=await api<Sync>('/sync');state.sync=report;checked=true;renderSessionSyncStatus();
     const button=$('#sync-button');button.classList.toggle('syncing',report.running);button.querySelector('span')!.textContent=report.running?'正在同步':'同步对话';(button as HTMLButtonElement).disabled=report.running;
     if(report.running){$('#sync-status').innerHTML=`${icon('RefreshCw','spinning')} ${report.stage==='chatgpt_desktop_repair'?'正在恢复补全连接':report.stage==='chatgpt_desktop_live'?'正在同步桌面会话':`正在收录 ${report.done} / ${report.total}`} <span class="sync-file">${esc(report.file)}</span>`;if(report.done%10===0)refreshStats().catch(handle);}
-    else {$('#sync-status').innerHTML=`<i class="status-dot"></i> ${report.finished?`${report.errors.length?'同步完成，部分来源待重试':report.warnings.length?'同步完成，部分内容待补全':'档案已更新'} · ${num(report.imported)} 条新增 / 更新 · ${report.duration}s`:'准备就绪'}`;if(previous&&(previous.running||report.finished!==previous.finished)){readerCache.clear();await refreshStats();await loadList();if(report.session_id)toast(sessionSyncMessage(report),report.errors.length>0);else if(!report.automatic||report.errors.length||report.warnings.length)toast(report.errors.length?'同步完成，部分来源未读取；详情见数据与来源':report.warnings.length?'同步完成，部分内容待补全；详情见数据与来源':`同步完成 · ${num(report.imported)} 条新增或更新`);if(!report.session_id||state.id===report.session_id)await reloadCurrentReader();if((document.querySelector('#sources-dialog') as HTMLDialogElement).open)sourcesDialog(false);}}
+    else {
+      $('#sync-status').innerHTML=`<i class="status-dot"></i> ${report.finished?`${report.errors.length?'同步完成，部分来源待重试':report.warnings.length?'同步完成，部分内容待补全':'档案已更新'} · ${num(report.imported)} 条新增 / 更新 · ${report.duration}s`:'准备就绪'}`;
+      if(previous&&(previous.running||report.finished!==previous.finished)) {
+        readerCache.clear();
+        await refreshStats();
+        // A targeted read updates its existing card in place. Reloading page
+        // one would discard loaded pages, selection and the user's position.
+        if(!report.session_id) await loadList();
+        if(report.session_id) toast(sessionSyncMessage(report),report.errors.length>0);
+        else if(!report.automatic||report.errors.length||report.warnings.length) toast(report.errors.length?'同步完成，部分来源未读取；详情见数据与来源':report.warnings.length?'同步完成，部分内容待补全；详情见数据与来源':`同步完成 · ${num(report.imported)} 条新增或更新`);
+        if(!report.session_id||state.id===report.session_id) await reloadCurrentReader();
+        if(report.session_id) await refreshSyncedSessionCard(report.session_id);
+        if((document.querySelector('#sources-dialog') as HTMLDialogElement).open) sourcesDialog(false);
+      }
+    }
   }catch(error){if(!state.sync)$('#sync-status').innerHTML='<i class="status-dot offline"></i> 服务暂时未连接';}
   finally{syncBusy=false;syncTimer=window.setTimeout(pollSync,state.sync?.running?1200:8000);if(checked)maybeAutoSync();}
 }
