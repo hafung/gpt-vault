@@ -347,6 +347,27 @@ func desktopUnavailable(reason string) error {
 	}
 }
 
+func desktopConversationReadError(status int) error {
+	var message string
+	switch status {
+	case 404:
+		// The endpoint also returns 404 when the current account cannot see a
+		// conversation. It cannot establish whether the user deleted it.
+		message = "Desktop 中找不到此会话（HTTP 404）；会话可能已删除，或当前账号无法访问"
+	case 401:
+		message = "Desktop 未通过登录验证（HTTP 401）；请确认已登录后重新同步"
+	case 403:
+		message = "Desktop 无权访问此会话（HTTP 403）；请确认当前登录账号有权访问"
+	case 429:
+		message = "Desktop 会话读取请求过于频繁（HTTP 429）；请稍后重新同步"
+	case 0:
+		message = "本次未能从 Desktop 读取会话；可能是连接中断或读取超时，请稍后重试"
+	default:
+		message = fmt.Sprintf("Desktop 会话读取暂未完成（HTTP %d）；请稍后重新同步", status)
+	}
+	return errors.New(message + "。本地已保存的对话和附件仍保留。")
+}
+
 func (i *Importer) saveDesktopCheckpoint(job desktopCaptureJob, checkpoint desktopCheckpoint) error {
 	_, err := i.Store.Write.Exec("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", desktopCheckpointPrefix+"chatgpt:"+job.ID, jsonText(checkpoint))
 	return err
@@ -628,7 +649,7 @@ func (i *Importer) captureDesktopJobs(jobs []desktopCaptureJob, full, targeted b
 			if err := i.saveDesktopCheckpoint(job, desktopCheckpoint{Updated: job.updated, Attempt: now(), RetryAfter: now() + 30*60, Cursor: job.Cursor}); err != nil {
 				return err
 			}
-			i.issue(job.title, fmt.Errorf("桌面分页读取暂未完成（HTTP %d）；请确认当前 Desktop 登录的是此会话所属账号", result.Status), !targeted)
+			i.issue(job.title, desktopConversationReadError(result.Status), !targeted)
 			return nil
 		}
 		if result.Kind != "conversation" {
