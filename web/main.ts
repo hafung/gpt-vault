@@ -295,6 +295,10 @@ function decorateProse() {
     if (last) { fragment.append(document.createTextNode(text.slice(last))); node.replaceWith(fragment); }
   }
   root.querySelectorAll<HTMLButtonElement>('.local-path-link').forEach(button => button.onclick = () => showLocalPath(button.dataset.localPath!));
+  root.querySelectorAll<HTMLButtonElement>('.writing-copy').forEach(button => button.onclick = () => {
+    const body = button.closest('.chatgpt-writing')?.querySelector<HTMLElement>('.chatgpt-writing-body');
+    if (body) navigator.clipboard.writeText(body.innerText.trim()).then(() => toast('写作内容已复制')).catch(handle);
+  });
   root.querySelectorAll<HTMLElement>('.prose pre').forEach(pre => { if (pre.querySelector('.code-copy')) return; const button = document.createElement('button'); button.className = 'code-copy'; button.title = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.innerHTML = icon('Copy'); button.onclick = () => navigator.clipboard.writeText(pre.querySelector('code')?.textContent || '').then(() => toast('代码已复制')).catch(handle); pre.prepend(button); });
   root.querySelectorAll<HTMLButtonElement>('.copy-message').forEach(b => b.onclick = async () => { try { const data = await api<{ body: string }>('/messages/' + b.dataset.mid); await navigator.clipboard.writeText(data.body); toast('消息已复制'); } catch (error) { handle(error); } });
   root.querySelectorAll<HTMLButtonElement>('.expand-message').forEach(b => b.onclick = async () => { try { b.disabled = true; const data = await api<{ body: string }>('/messages/' + b.dataset.mid); const prose = $(`[data-body="${b.dataset.mid}"]`,root); const message = state.page?.items.find(item => String(item.id) === b.dataset.mid); prose.innerHTML = renderMessageContent(data.body, message?.metadata.chatgpt_ui, state.session?.provider === 'ChatGPT', message?.metadata.image_assets, message?.metadata.file_assets); b.remove(); decorateProse(); markReader(); } catch (error) { b.disabled = false; handle(error); } });

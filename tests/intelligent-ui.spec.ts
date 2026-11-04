@@ -26,6 +26,69 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
 }
 
 const marker = (kind: string, payload: string) => `\uE200${kind}\uE202${payload}\uE201`;
+test('writing dialogue and bilingual document render as titled blocks and copy separately after expansion', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { (window as unknown as { copied: string }).copied = text; } } });
+  });
+  const dialogue = '**Dad:** Hey, what are you working on over there?  \n**Daughter:** I’m making a little house out of cardboard.  \n**Dad:** Keep at it.';
+  const body = `前文 **保留**。\n\n:::writing{variant="chat_message" id="58314" title="Dad & Daughter Dialogue"}\n${dialogue}\n:::\n\n后文说明。\n\n:::writing{variant="document" id="58314" title="中英对照"}\n**Dad:** Keep at it.  \n**爸爸：** 继续做下去吧。\n\n第二段。\n:::\n\n最后一句。`;
+  await fixture(page, body, {}, true, body + '\n\n完整内容。');
+  for (const expanded of [false, true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    const blocks = page.locator('.chatgpt-writing');
+    await expect(blocks).toHaveCount(2);
+    await expect(blocks.locator('.chatgpt-writing-header > strong')).toHaveText(['Dad & Daughter Dialogue', '中英对照']);
+    await expect(blocks.first().locator('.chatgpt-writing-body strong')).toHaveText(['Dad:', 'Daughter:', 'Dad:']);
+    await expect(blocks.nth(1).locator('.chatgpt-writing-body p')).toHaveCount(2);
+    await expect(page.locator('.prose')).toContainText('前文 保留。');
+    await expect(page.locator('.prose')).toContainText('后文说明。');
+    await expect(page.locator('.prose')).toContainText('最后一句。');
+    await expect(page.locator('.prose')).not.toContainText(':::writing');
+    await blocks.first().getByRole('button', { name: '复制写作内容' }).click();
+    expect(await page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe('Dad: Hey, what are you working on over there?\nDaughter: I’m making a little house out of cardboard.\nDad: Keep at it.');
+  }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  }
+});
+
+test('writing wrappers coexist with nested DIL, citations, TeX and code containing closing delimiters', async ({ page }) => {
+  const cite = marker('cite', 'turn1view0');
+  const body = `<box>\n\n:::writing{variant="document" id="12" title="带格式的写作"}\n# 正文标题\n\n${cite}\n\n\\(x^2\\)\n\n\`\`\`text\n:::\n\`\`\`\n\n<text>组件正文</text>\n:::\n\n写作块后的 **正文**。\n</box>`;
+  await fixture(page, body, { chatgpt_ui: { content_references: [{ matched_text: cite, items: [{ url: 'https://example.com/writing-source' }] }] } });
+  const block = page.locator('.dil-response .chatgpt-writing');
+  await expect(block).toHaveCount(1);
+  await expect(block.locator('h1')).toHaveText('正文标题');
+  await expect(block.locator('.dil-citations a')).toHaveAttribute('href', 'https://example.com/writing-source');
+  await expect(block.locator('math')).toHaveCount(1);
+  await expect(block.locator('pre code')).toHaveText(':::\n');
+  await expect(block.locator('.dil-text')).toHaveText('组件正文');
+  await expect(block).not.toContainText('写作块后的');
+  await expect(page.locator('.dil-response')).toContainText('写作块后的 正文。');
+});
+
+test('writing examples in code and incomplete or invalid directives stay literal', async ({ page }) => {
+  const writing = ':::writing{variant="document" id="12" title="示例"}\n内容\n:::';
+  const incomplete = ':::writing{variant="document" id="13" title="未结束"}\n后续正文仍保留。';
+  await fixture(page, `\`\`\`\`text\n${writing}\n\`\`\`\n\`\`\`\`\n\n\`${writing.split('\n')[0]}\`\n\n:::writing{variant={run()} id="14"}\n普通内容\n:::\n\n${incomplete}`);
+  await expect(page.locator('.chatgpt-writing')).toHaveCount(0);
+  await expect(page.locator('.prose pre code')).toHaveText(writing + '\n```\n');
+  await expect(page.locator('.prose p code')).toHaveText(writing.split('\n')[0]);
+  await expect(page.locator('.prose')).toContainText('variant={run()}');
+  await expect(page.locator('.prose')).toContainText('后续正文仍保留。');
+});
+
+test('writing titles and content pass through sanitization without executing markup', async ({ page }) => {
+  const title = '<img src=x onerror=window.xss=1> & title';
+  await fixture(page, `:::writing{variant="document" id="15" title=${JSON.stringify(title)}}\n<script>window.xss=1</script>\n\n保留 **正文**。\n\n[危险链接](javascript:alert(1))\n:::\n\n块外正文。`);
+  await expect(page.locator('.chatgpt-writing-header > strong')).toHaveText(title);
+  await expect(page.locator('.chatgpt-writing-body strong')).toHaveText('正文');
+  await expect(page.locator('.prose img,.prose script,.prose [onerror],.prose a[href^="javascript:"]')).toHaveCount(0);
+  await expect(page.locator('.chatgpt-writing')).not.toContainText('块外正文');
+  expect(await page.evaluate(() => 'xss' in window)).toBeFalsy();
+});
+
 test('archived hidden memcite disappears from prose while citations, DIL and literal examples survive expansion', async ({ page }) => {
   const memory = '\uE200memcite\uE201', cite = marker('cite', 'turn1search0');
   const body = `<box>\n\n**继续 PG。** ${cite} ${memory}\n\n</box>\n\n\`${memory}\`\n\n\`\`\`text\n${memory}\n\`\`\``;

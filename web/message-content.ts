@@ -4,6 +4,7 @@ import { staticValue, type Scope } from './dil-values';
 import { markdownLiteralEnd, mapMarkdownText } from './math';
 import { renderFileLinks, type FileAssets } from './chatgpt-files';
 import { renderChatGPTMarkers } from './chatgpt-markers';
+import { renderChatGPTWriting } from './chatgpt-writing';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -137,6 +138,10 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     groups.push(html);
     const marker = `\uE000EVIMAGE${groups.length - 1}\uE001`;
     return block ? `\n\n${marker}\n\n` : marker;
+  });
+  if (chatGPT) body = renderChatGPTWriting(body, html => {
+    groups.push(html);
+    return `\n\n\uE000EVIMAGE${groups.length - 1}\uE001\n\n`;
   });
   const sanitize = (html: string) => DOMPurify.sanitize(renderFileLinks(html.replace(/<p>(\uE000EVIMAGE\d+\uE001)<\/p>/g, '$1').replace(/\uE000EVIMAGE(\d+)\uE001/g, (_, index: string) => groups[Number(index)] ?? ''), fileAssets), { FORBID_TAGS: ['img', 'style', 'iframe'], FORBID_ATTR: ['style'] });
   const dil = ui?.model_dil_v2;
