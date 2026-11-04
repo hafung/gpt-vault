@@ -11,11 +11,14 @@ const cwd = 'D:/projects/demo';
 const path = 'D:/projects/codex/2026-10-06/three-js-imagegen-skill-3d-tts/outputs/pip-and-the-little-star/dist/illustrations/prompts-journey.md';
 
 test('drive and loopback file references recover the actual local destination', () => {
-  for (const value of [path, path + ':12', `http://localhost:8765/${path}`, `http://127.0.0.1:8765/${path}#L12`, `http://[::1]:8765/${path}`, `file:///${path}`]) {
+  for (const value of [path, path + ':12', '/' + path, '/' + path + '#L12', `http://localhost:8765/${path}`, `http://127.0.0.1:8765/${path}#L12`, `http://[::1]:8765/${path}`, `file:///${path}`]) {
     assert.equal(localPathTarget(value, cwd, true), path, value);
   }
   assert.equal(localPathTarget('http://localhost:8765/D:/notes/%E4%B8%AD%E6%96%87%20file.md', cwd, true), 'D:/notes/中文 file.md');
   assert.equal(localPathTarget('D:\\projects\\folder', cwd), 'D:\\projects\\folder');
+  assert.equal(localPathTarget('/D:/notes/%E4%B8%AD%E6%96%87%20file.md', cwd, true), 'D:/notes/中文 file.md');
+  assert.equal(localPathTarget('/d:\\notes\\file.md', cwd), 'd:\\notes\\file.md');
+  assert.equal(localPathTarget('/data/notes.md', cwd, true), '/data/notes.md');
   assert.equal(localPathTarget('/home/zz/report.md:8:2', cwd), '/home/zz/report.md');
   assert.equal(localPathTarget('file:///home/zz/report.md', cwd, true), '/home/zz/report.md');
   assert.equal(localPathTarget('http://localhost:8765/home/zz/report.md', cwd, true), '/home/zz/report.md');

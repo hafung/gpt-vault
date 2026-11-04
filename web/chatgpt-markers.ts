@@ -50,8 +50,11 @@ function chartHTML(chart: Data): string | undefined {
 // Process only ChatGPT prose, consuming a whole marker before inspecting its
 // JSON. Code fences, inline code and TeX remain opaque to this parser.
 export function renderChatGPTMarkers(body: string, ui: ChatGPTUI | undefined, slot: (html: string, block: boolean) => string): string {
-  if (!/\uE200(?:cite|genui)\uE202/.test(body)) return body;
+  if (!/\uE200(?:(?:cite|genui)\uE202|memcite\uE201)/.test(body)) return body;
   const references = ui?.content_references ?? [], numbers = new Map<string, number>();
+  // Desktop marks this empty memory citation as hidden. Suppress only that
+  // exact archived marker, leaving ordinary citations and literal examples alone.
+  const hiddenMemory = references.some(ref => ref.type === 'hidden' && ref.matched_text === '\uE200memcite\uE201');
   function citation(raw: string, payload: string): string {
     const ids = payload.split('\uE202');
     const exact = references.filter(ref => ref.matched_text === raw);
@@ -83,6 +86,7 @@ export function renderChatGPTMarkers(body: string, ui: ChatGPTUI | undefined, sl
     const end = markdownLiteralEnd(body, i);
     if (end > i) { result += body.slice(i, end); i = end; continue; }
     if (body[i] === '\\' && i + 1 < body.length) { result += body.slice(i, i + 2); i += 2; continue; }
+    if (hiddenMemory && body.startsWith('\uE200memcite\uE201', i)) { i += '\uE200memcite\uE201'.length; continue; }
     const match = body[i] === '\uE200' && /^\uE200(cite|genui)\uE202([\s\S]*?)\uE201/.exec(body.slice(i));
     if (!match) { result += body[i++]; continue; }
     const [raw, kind, payload] = match;

@@ -18,6 +18,8 @@ export function localPathTarget(value: string, cwd = '', markdownLink = false): 
   } else if (markdownLink) {
     try { path = decodeURIComponent(path); } catch { return null; }
   }
+  // Markdown can contain /D:/... directly, without a file: or loopback URL.
+  if (/^\/[a-z]:[\\/]/i.test(path)) path = path.slice(1);
   // Source references carry a line number, which is not part of the filename.
   path = path.replace(/#L?\d+(?:[-:]L?\d+)?$/i, '').replace(/:\d+(?::\d+)?$/, '');
   if (!path || /[\x00-\x1f]/.test(path)) return null;

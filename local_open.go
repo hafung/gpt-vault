@@ -48,7 +48,12 @@ func localOpenTarget(value, action string) (string, error) {
 	if value == "" {
 		return "", errors.New("本地路径无效")
 	}
-	drive := len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	// Older pages may submit Markdown's slash-prefixed Windows drive paths.
+	driveValue := strings.TrimPrefix(value, "/")
+	drive := len(driveValue) >= 3 && ((driveValue[0] >= 'A' && driveValue[0] <= 'Z') || (driveValue[0] >= 'a' && driveValue[0] <= 'z')) && driveValue[1] == ':' && (driveValue[2] == '/' || driveValue[2] == '\\')
+	if drive {
+		value = driveValue
+	}
 	if !drive && !filepath.IsAbs(value) && value != "~" && !strings.HasPrefix(value, "~/") {
 		return "", errors.New("请提供本地绝对路径")
 	}

@@ -26,6 +26,39 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
 }
 
 const marker = (kind: string, payload: string) => `\uE200${kind}\uE202${payload}\uE201`;
+test('archived hidden memcite disappears from prose while citations, DIL and literal examples survive expansion', async ({ page }) => {
+  const memory = '\uE200memcite\uE201', cite = marker('cite', 'turn1search0');
+  const body = `<box>\n\n**继续 PG。** ${cite} ${memory}\n\n</box>\n\n\`${memory}\`\n\n\`\`\`text\n${memory}\n\`\`\``;
+  await fixture(page, body, { chatgpt_ui: { content_references: [
+    { type: 'hidden', matched_text: memory, refs: [], safe_urls: [] },
+    { type: 'grouped_webpages', matched_text: cite, items: [{ url: 'https://example.com/database', title: '数据库来源' }] },
+  ] } }, true, body + '\n\n完整内容。');
+  for (const expanded of [false, true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    await expect(page.locator('.dil-response strong')).toHaveText('继续 PG。');
+    await expect(page.locator('.dil-response .dil-box')).not.toContainText(memory);
+    await expect(page.locator('.dil-citations a')).toHaveAttribute('href', 'https://example.com/database');
+    await expect(page.locator('.dil-response p code')).toHaveText(memory);
+    await expect(page.locator('.dil-response pre code')).toHaveText(memory + '\n');
+  }
+});
+
+test('hidden memcite also disappears from plain Markdown without changing its formatting', async ({ page }) => {
+  const memory = '\uE200memcite\uE201';
+  await fixture(page, `**继续 PG。** ${memory}`, { chatgpt_ui: { content_references: [{ type: 'hidden', matched_text: memory }] } });
+  await expect(page.locator('.prose strong')).toHaveText('继续 PG。');
+  await expect(page.locator('.prose')).not.toContainText(memory);
+});
+
+test('memcite without an exact hidden reference stays intact', async ({ page }) => {
+  const memory = '\uE200memcite\uE201';
+  await fixture(page, `正文 ${memory}`, { chatgpt_ui: { content_references: [
+    { type: 'hidden', matched_text: memory + '其他正文' },
+    { type: 'grouped_webpages', matched_text: memory },
+  ] } });
+  await expect(page.locator('.prose')).toContainText(`正文 ${memory}`);
+});
+
 const industryChart = {
   chartType: 'pie', meta: { title: '2025 年中国 GDP 三次产业结构', description: 'GDP 140.19 万亿元，按三次产业增加值划分。', footer: '数据：国家统计局，2025 年国民经济和社会发展统计公报' },
   nameKey: 'industry', valueKey: 'gdp', series: [{ dataKey: 'gdp', label: '增加值', valueFormat: 'raw', valueSuffix: ' 万亿元' }],

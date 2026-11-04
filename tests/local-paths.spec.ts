@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const examplePath = 'D:/projects/codex/2026-10-06/three-js-imagegen-skill-3d-tts/outputs/pip-and-the-little-star/dist/illustrations/prompts-journey.md';
 const body = [
   `[Windows 文件](${examplePath}:12)`,
+  '[article.md](/D:/projects/typephp-native-core/output/typephp-wechat/article.md)',
   `http://localhost:8765/${examplePath}`,
   '[带空格文件](http://127.0.0.1:8765/D:/notes/%E4%B8%AD%E6%96%87%20file.md)',
   '[文件协议](file:///D:/notes/file.md)',
@@ -48,7 +49,7 @@ async function fixture(page: Page) {
 test('local destinations are file controls while external URLs remain direct links', async ({ page }) => {
   const { calls } = await fixture(page);
   const prose = page.locator('.prose');
-  await expect(prose.locator('.local-path-link')).toHaveCount(9);
+  await expect(prose.locator('.local-path-link')).toHaveCount(10);
   await expect(prose.getByRole('button', { name: 'Windows 文件', exact: true })).toHaveAttribute('data-local-path', examplePath);
   await expect(prose.getByRole('button', { name: '带空格文件', exact: true })).toHaveAttribute('data-local-path', 'D:/notes/中文 file.md');
   await expect(prose.getByRole('button', { name: '文件协议', exact: true })).toHaveAttribute('data-local-path', 'D:/notes/file.md');
@@ -65,6 +66,17 @@ test('local destinations are file controls while external URLs remain direct lin
   await expect(popup).toHaveURL('https://example.com/D:/notes/file.md');
   await expect(page.locator('#local-path-dialog')).toBeHidden();
   await popup.close();
+});
+
+test('slash-prefixed Windows Markdown paths submit the actual drive path after confirmation', async ({ page }) => {
+  const { calls } = await fixture(page);
+  const path = 'D:/projects/typephp-native-core/output/typephp-wechat/article.md';
+  await page.getByRole('button', { name: 'article.md', exact: true }).click();
+  await expect(page.locator('#local-path-value')).toHaveText(path);
+  expect(calls).toHaveLength(0);
+  await page.locator('#local-path-open').click();
+  await expect(page.locator('#local-path-dialog')).toBeHidden();
+  expect(calls).toEqual([{ path, action: 'open', confirmed: true }]);
 });
 
 test('localhost drive paths require confirmation and support opening the containing folder', async ({ page }) => {
