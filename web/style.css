@@ -159,3 +159,19 @@ body:has(#sources-dialog[open]) .backup-activity{display:none}
 .chatgpt-writing-body{padding:16px;min-width:0}.chatgpt-writing-body>:first-child{margin-top:0}.chatgpt-writing-body>:last-child{margin-bottom:0}
 .chatgpt-writing-chat .chatgpt-writing-body p{white-space:pre-line}
 @media(max-width:680px){.chatgpt-writing-body{padding:12px}.chatgpt-writing-body pre{margin-left:0}.chatgpt-writing-header{padding:9px 12px}}
+
+/* Native local DIL controls retain keyboard and pointer interaction. */
+.prose input.dil-slider{display:block;box-sizing:border-box;width:100%;height:24px;min-width:0;margin:2px 0 6px;padding:0;border:0;border-radius:999px;appearance:none;background:var(--hover);cursor:pointer;accent-color:var(--green)}
+.dil-slider::-webkit-slider-thumb{appearance:none;width:20px;height:20px;border:1px solid var(--line);border-radius:50%;background:var(--panel);box-shadow:0 1px 2px #0002}
+.dil-slider::-moz-range-thumb{width:20px;height:20px;border:1px solid var(--line);border-radius:50%;background:var(--panel)}
+.dil-slider:focus-visible,.dil-checkbox input:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.prose .dil-checkbox{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;font-weight:normal}
+.prose .dil-checkbox input{appearance:none;flex:0 0 20px;width:20px;height:20px;margin:2px 0 0;padding:0;border:1px solid var(--line);border-radius:50%;background:transparent;cursor:pointer}
+.prose .dil-checkbox input:checked{background:var(--green);border-color:var(--green)}
+.prose .dil-checkbox input:checked:after{content:'✓';display:block;color:white;text-align:center;font-size:14px;line-height:18px}
+.dil-checkbox input:checked+span{color:var(--muted);text-decoration:line-through}
+.dil-checkbox p{margin:0}
+
+.prose .dil-title.dil-success,.prose .dil-text.dil-success{color:#009c43}
+[data-theme=dark] .prose .dil-title.dil-success,[data-theme=dark] .prose .dil-text.dil-success{color:#69d994}
+.dil-box:has(> .dil-box > .dil-slider) :is(.dil-title,.dil-text>p,.dil-caption>p){margin:0}

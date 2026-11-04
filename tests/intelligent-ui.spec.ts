@@ -343,12 +343,12 @@ test('resolved images use compiled resolution order, load on click and survive e
   await expect(page.locator('.dil-load-image')).toHaveCount(2);
 });
 
-test('static state and conditionals render without running JavaScript', async ({ page }) => {
+test('state and conditionals render while arbitrary JavaScript stays inert', async ({ page }) => {
   await fixture(page, '{@body const [seats,setSeats] = DIL.useState(8)}\n{@body const price = seats*29}\n<box><title>${price}/mo</title>{#if seats > 5}<text>团队方案</text>{:else}<text>个人方案</text>{/if}<slider value={seats}/><button onClick={()=>{window.xss=1}}>确认</button></box>');
   await expect(page.locator('.dil-title')).toHaveText('$232/mo');
   await expect(page.locator('.dil-response')).toContainText('团队方案');
   await expect(page.locator('.dil-response')).not.toContainText('个人方案');
-  await expect(page.locator('.dil-static-control').first()).toContainText('8');
+  await expect(page.locator('input.dil-slider')).toHaveValue('8');
   expect(await page.evaluate(() => 'xss' in window)).toBeFalsy();
 });
 
@@ -567,4 +567,79 @@ test('compact rows preserve explicit breaks and leave block Markdown and card ro
   await expect(page.locator('.dil-response > p br')).toHaveCount(1);
   await page.setViewportSize({width:390, height:900});
   expect(await rows.nth(3).evaluate(el=>getComputedStyle(el).flexDirection)).toBe('column');
+});
+
+
+test('FDE archived calculator and checklist react locally through expansion and keyboard input', async ({page}) => {
+  const body = (await readFile(resolve('tests/fixtures/fde-first-order.txt'), 'utf8')) + '\n\n[参考](https://example.com/reference)\n\n' + String.raw`\(x^2\)` + '\n\n```html\n<slider value={45}/>\n```';
+  await fixture(page, body, {}, true, body + '\n\n完整正文 **仍然保留**。');
+  for (const expanded of [false, true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    const sliders = page.locator('.dil-slider');
+    const checks = page.locator('.dil-response').getByRole('checkbox');
+    await expect(sliders).toHaveCount(4);
+    await expect(checks).toHaveCount(6);
+    const quote = page.locator('.dil-title').filter({hasText:'¥'});
+    await expect(quote).toHaveText('¥17,400');
+    await expect(page.locator('.dil-response')).toContainText('3.8 周完成');
+    const mathBefore = await page.locator('.prose math').evaluate(node=>node.outerHTML);
+    await sliders.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(sliders.first()).toBeFocused();
+    await expect(sliders.first()).toHaveValue('50');
+    await expect(quote).toHaveText('¥19,200');
+    await expect(page.locator('.dil-response')).toContainText('4.2 周完成');
+    await sliders.first().scrollIntoViewIfNeeded();
+    const range = await sliders.first().boundingBox();
+    const handle = await sliders.first().elementHandle();
+    await page.mouse.move(range!.x + range!.width * .38, range!.y + range!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(range!.x + range!.width * .85, range!.y + range!.height / 2, {steps:8});
+    await page.mouse.up();
+    expect(Number(await sliders.first().inputValue())).toBeGreaterThan(50);
+    await expect(quote).not.toHaveText('¥19,200');
+    expect(await handle!.evaluate(node => node === document.querySelector('.dil-slider'))).toBeTruthy();
+    await sliders.first().fill('50');
+    await expect(quote).toHaveText('¥19,200');
+    for (const [i, value] of [[1,'400'],[2,'2000'],[3,'30']]) {
+      await sliders.nth(Number(i)).fill(String(value));
+    }
+    await expect(quote).toHaveText('¥28,600');
+    expect(await page.locator('.prose math').evaluate(node=>node.outerHTML)).toBe(mathBefore);
+    await expect(page.locator('.dil-response a')).toHaveAttribute('target','_blank');
+    await expect(page.locator('.dil-response .code-copy')).toHaveCount(1);
+    await expect(page.locator('.dil-response')).toContainText('¥2,000');
+    await checks.nth(0).check(); await checks.nth(2).check();
+    await expect(page.locator('.dil-badge')).toHaveText('2/6');
+    await checks.nth(0).uncheck();
+    await expect(checks.nth(2)).toBeChecked();
+    await expect(page.locator('.dil-badge')).toHaveText('1/6');
+    for (const check of await checks.all()) await check.check();
+    await expect(page.locator('.dil-badge')).toHaveText('6/6');
+    await expect(page.locator('.dil-badge')).toHaveClass(/dil-success/);
+    await checks.nth(5).uncheck();
+    await expect(page.locator('.dil-badge')).toHaveText('5/6');
+    await expect(page.locator('.dil-badge')).not.toHaveClass(/dil-success/);
+    await expect(quote).toHaveText('¥28,600');
+    await expect(page.locator('.dil-response')).not.toContainText('存档快照');
+    await expect(page.locator('.dil-note')).toHaveCount(0);
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+    }
+    if (expanded) {
+      await expect(page.locator('.dil-response strong').last()).toHaveText('仍然保留');
+      await page.locator('.dil-response').screenshot({path:'artifacts/fde-interactive-mobile.png'});
+    }
+  }
+});
+
+test('unsupported control handlers and hostile function calls cannot execute archived JavaScript', async ({page}) => {
+  await fixture(page, `{@body const [v,setV]=DIL.useState(20)}
+<box><slider value={v} onChange={x=>window.alert(x)}/><checkbox onChange={x=>({}).constructor.constructor("window.xss=1")()}>危险处理器</checkbox>
+<text>{Math.constructor("window.xss=1")()}</text><text>{(12).toFixed(9999999)}</text></box>`);
+  await page.locator('.dil-slider').fill('30');
+  await page.getByRole('checkbox', {name:'危险处理器'}).check();
+  expect(await page.evaluate(()=> 'xss' in window)).toBeFalsy();
+  await expect(page.locator('.prose script,.prose [onchange],.prose [oninput]')).toHaveCount(0);
 });

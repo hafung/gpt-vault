@@ -74,7 +74,7 @@ An answer looked fine in ChatGPT, but its saved copy is missing a paragraph, an 
 - **Archive generated files.** Desktop enhanced sync downloads accessible `sandbox:` Markdown files, documents, and storyboard pictures, preserving Unicode filenames for local viewing, downloads, and full backups. Files that are no longer accessible keep an explanation and can be retried. Files are limited to 8 MiB each, within a shared 16 MiB attachment budget per batch.
 - **Recover details in existing conversations.** On startup, GPT Vault restores omitted visual content from saved original records, even when the source is no longer available.
 
-Markdown, code blocks, and ordinary tables keep their familiar presentation. Sliders, forms, and other interactive content appear as static snapshots, with the original content available to inspect. Uncollected remote images require an internet connection to load.
+Markdown, code blocks, and ordinary tables keep their familiar presentation. Supported sliders and checklists work locally, updating formulas and completion counts within the reply. Other forms and unsupported interactions remain static snapshots, with the original content available to inspect. Uncollected remote images require an internet connection to load.
 
 ## Keep the history, even when the source changes
 

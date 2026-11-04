@@ -1,6 +1,6 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { staticValue, type Scope } from './dil-values';
+import { staticValue, dilFunction, callDil, isDilFunction, type Scope } from './dil-values';
 import { markdownLiteralEnd, mapMarkdownText } from './math';
 import { renderFileLinks, type FileAssets } from './chatgpt-files';
 import { renderChatGPTMarkers } from './chatgpt-markers';
@@ -110,7 +110,8 @@ function dedent(source: string): string {
   return lines.map(line => line.slice(Math.min(amount, /^ */.exec(line)![0].length))).join('\n').trim();
 }
 
-export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}, fileAssets: FileAssets = {}): string {
+interface DilRuntime { states: Record<string, unknown>; handlers: unknown[] }
+export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}, fileAssets: FileAssets = {}, runtime?: DilRuntime): string {
   const original = body, groups: string[] = [];
   function imageFigure(item: Data, fallback = '回答中的图片'): string {
     const urls = [item.content_url, item.original_content_url, item.thumbnail_url, item.src, item.url];
@@ -165,6 +166,9 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   const cursors = new Map<string, number>();
   const getState = (name: string) => { const index = cursors.get(name) ?? 0; cursors.set(name, index + 1); return queues.get(name)?.[index] ?? {}; };
   const scope = Object.assign(Object.create(null), dil?.appData?.opGenui?.modelDataBindings ?? {}) as Scope;
+  const live: DilRuntime = runtime ?? { states: Object.create(null), handlers: [] };
+  live.handlers = [];
+  let stateIndex = 0;
   let limited = false, count = 0;
   function markdown(source: string, context: Scope, inlineOnly = false): string {
     source = mapMarkdownText(source, prose => prose.replace(/\{([^{}\n]+)\}/g, (raw, expression: string) => {
@@ -233,9 +237,17 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     const a = attributes(node.attrs, context), name = node.name;
     if (name === 'svg') return vector([node], context, depth);
     if (name === 'body') {
-      const state = /^const\s+\[\s*([\w$]+)\s*,[^\]]+\]\s*=\s*DIL\.useState\(([\s\S]*)\)\s*;?$/.exec(node.attrs);
+      const state = /^const\s+\[\s*([\w$]+)\s*,\s*([\w$]+)\s*\]\s*=\s*DIL\.useState\(([\s\S]*)\)\s*;?$/.exec(node.attrs);
       const variable = /^(?:const|let)\s+([\w$]+)\s*=\s*([\s\S]*?)\s*;?$/.exec(node.attrs);
-      if (state) context[state[1]] = staticValue(state[2], context);
+      if (state) {
+        const id = String(stateIndex++);
+        if (!Object.hasOwn(live.states, id)) live.states[id] = staticValue(state[3], context);
+        context[state[1]] = live.states[id];
+        context[state[2]] = dilFunction(([value]) => {
+          const next = isDilFunction(value) ? callDil(value, [live.states[id]]) : value;
+          if (next !== undefined && (typeof next === 'number' && Number.isFinite(next) || typeof next === 'boolean' || typeof next === 'string' || Array.isArray(next) && next.length <= 1000)) live.states[id] = next;
+        });
+      }
       else if (variable) context[variable[1]] = staticValue(variable[2], context);
       else limited = true;
       return '';
@@ -298,7 +310,17 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     if (name === 'table') return `<div class="dil-table-wrap"><table>${content}</table></div>`;
     const table: Record<string, string> = { 'table-head': 'thead', 'table-body': 'tbody', 'table-row': 'tr', 'table-cell': a.header ? 'th' : 'td', list: 'ul', 'list-item': 'li' };
     if (table[name]) return `<${table[name]}>${content}</${table[name]}>`;
-    if (name === 'button' || name === 'radio' || name === 'checkbox' || name === 'input' || name === 'slider' || name === 'select' || name === 'progress') {
+    if (name === 'slider' || name === 'checkbox') {
+      const handler = isDilFunction(a.onChange) ? a.onChange : undefined;
+      const control = live.handlers.push(handler) - 1;
+      const binding = ` data-dil-control="${control}"`;
+      const label = esc(a.label ?? (name === 'slider' ? '调整数值' : '勾选项目'));
+      if (name === 'checkbox') return `<label class="dil-checkbox"><input type="checkbox"${binding}${a.checked === true ? ' checked' : ''}><span>${inner || label}</span></label>`;
+      const finite = (value: unknown, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+      const min = finite(a.min, 0), max = Math.max(min, finite(a.max, 100));
+      return `<input class="dil-slider" type="range" min="${min}" max="${max}" step="${Math.max(.0001, finite(a.step, 1))}" value="${Math.max(min, Math.min(max, finite(a.value, min)))}" aria-label="${label}"${binding}>`;
+    }
+    if (name === 'button' || name === 'radio' || name === 'input' || name === 'select' || name === 'progress') {
       limited = true;
       return `<div class="dil-static-control">${content || esc(a.label ?? a.placeholder ?? name)}${a.value !== undefined ? ` <span>${esc(a.value)}</span>` : ''}<small>存档快照</small></div>`;
     }
@@ -317,10 +339,63 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   }
   const rendered = children(tree, scope, false);
   const note = limited ? '<div class="dil-note">部分交互或表达式以存档快照展示。</div>' : '';
-  return sanitize(`<div class="dil-response">${rendered}</div>${note}<details class="dil-source"><summary>${limited?'查看布局标记与未还原内容':'查看布局标记（正文已展示）'}</summary><pre><code>${esc(original || dil?.fallbackMarkdown || '')}</code></pre></details>`);
+  const interactive = !runtime && live.handlers.length ? ` data-dil-interactive="${esc(encodeURIComponent(JSON.stringify({ body: original || dil?.fallbackMarkdown || '', ui, chatGPT, imageAssets, fileAssets })))}"` : '';
+  return sanitize(`<div class="dil-response"${interactive}>${rendered}</div>${note}<details class="dil-source"><summary>${limited?'查看布局标记与未还原内容':'查看布局标记（正文已展示）'}</summary><pre><code>${esc(original || dil?.fallbackMarkdown || '')}</code></pre></details>`);
+}
+
+// Preserve existing nodes (especially a dragged range input) while updating
+// computed text and attributes. Interaction is local to this archived reply.
+function updateDilDOM(target: Node, source: Node, childrenOnly = false, previous?: Node): void {
+  if (previous?.isEqualNode(source)) return;
+  if (!childrenOnly && target instanceof Element && source instanceof Element) {
+    for (const attr of Array.from(target.attributes)) if (!source.hasAttribute(attr.name)) target.removeAttribute(attr.name);
+    for (const attr of Array.from(source.attributes)) if (target.getAttribute(attr.name) !== attr.value) target.setAttribute(attr.name, attr.value);
+    if (target instanceof HTMLInputElement && source instanceof HTMLInputElement) { target.value = source.value; target.checked = source.checked; }
+  }
+  const old = Array.from(target.childNodes), next = Array.from(source.childNodes);
+  for (let i = 0; i < Math.max(old.length, next.length); i++) {
+    if (!next[i]) old[i].remove();
+    else if (!old[i]) target.appendChild(next[i].cloneNode(true));
+    else if (old[i].nodeType !== next[i].nodeType || old[i].nodeName !== next[i].nodeName) target.replaceChild(next[i].cloneNode(true), old[i]);
+    else if (old[i].nodeType === Node.TEXT_NODE) { if (old[i].textContent !== next[i].textContent) old[i].textContent = next[i].textContent; }
+    else updateDilDOM(old[i], next[i], false, previous?.childNodes[i]);
+  }
+}
+const hydratedDil = new WeakSet<HTMLElement>();
+function decorateDilControls(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>('[data-dil-interactive]').forEach(response => {
+    if (hydratedDil.has(response)) return;
+    hydratedDil.add(response);
+    let config: { body: string; ui?: ChatGPTUI; chatGPT: boolean; imageAssets: Record<string,string>; fileAssets: FileAssets };
+    try { config = JSON.parse(decodeURIComponent(response.dataset.dilInteractive!)); } catch { return; }
+    const runtime: DilRuntime = { states: Object.create(null), handlers: [] };
+    const render = () => renderMessageContent(config.body, config.ui, config.chatGPT, config.imageAssets, config.fileAssets, runtime);
+    const initial = document.createElement('template'); initial.innerHTML = render();
+    let previous = initial.content.querySelector('.dil-response')!;
+    const bind = () => response.querySelectorAll<HTMLInputElement>('input[data-dil-control]').forEach(input => {
+      if (input.type === 'range' && input.getAttribute('aria-label') === '调整数值') {
+        const label = input.parentElement?.querySelector('.dil-row .dil-text')?.textContent?.trim();
+        if (label) input.setAttribute('aria-label', label);
+      }
+      const change = () => {
+        const handler = runtime.handlers[Number(input.dataset.dilControl)];
+        if (!isDilFunction(handler)) return;
+        callDil(handler, [input.type === 'checkbox' ? input.checked : Number(input.value)]);
+        const template = document.createElement('template'); template.innerHTML = render();
+        const next = template.content.querySelector('.dil-response');
+        if (!next) return;
+        // Keep the hydration marker on the root; patch only its children.
+        updateDilDOM(response, next, true, previous); previous = next;
+        decorateMessageImages(response); bind();
+      };
+      if (input.type === 'range') input.oninput = change; else input.onchange = change;
+    });
+    bind();
+  });
 }
 
 export function decorateMessageImages(root: ParentNode): void {
+  decorateDilControls(root);
   root.querySelectorAll<HTMLElement>('.dil-local-image').forEach(node => {
     const id = node.dataset.assetId;
     if (!id || !/^[a-f0-9]{64}$/.test(id) || node.querySelector('img')) return;

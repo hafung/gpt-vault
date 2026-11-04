@@ -1,0 +1,57 @@
+<box border radius="xl" padding={3} gap={3}>
+  <title size="lg">首单报价试算器</title>
+  {@body const [hours,setHours]=DIL.useState(45)}
+  {@body const [rate,setRate]=DIL.useState(300)}
+  {@body const [expense,setExpense]=DIL.useState(1000)}
+  {@body const [buffer,setBuffer]=DIL.useState(20)}
+  {@body const fmt=n=>"¥"+Math.round(n).toLocaleString("zh-CN")}
+  {@body const quote=(hours*rate+expense)*(1+buffer/100)}
+  <box gap={1}>
+    <row justify="between" align="center">
+      <text weight="medium" size="sm">预计投入工时</text>
+      <text weight="medium" tabularNums>{hours} 小时</text>
+    </row>
+    <slider min={20} max={100} step={5} value={hours} onChange={setHours}/>
+  </box>
+  <box gap={1}>
+    <row justify="between" align="center">
+      <text weight="medium" size="sm">内部工时价值</text>
+      <text weight="medium" tabularNums>¥{rate}/小时</text>
+    </row>
+    <slider min={150} max={600} step={50} value={rate} onChange={setRate}/>
+  </box>
+  <box gap={1}>
+    <row justify="between" align="center">
+      <text weight="medium" size="sm">第三方服务与其他成本</text>
+      <text weight="medium" tabularNums>{fmt(expense)}</text>
+    </row>
+    <slider min={0} max={5000} step={500} value={expense} onChange={setExpense}/>
+  </box>
+  <box gap={1}>
+    <row justify="between" align="center">
+      <text weight="medium" size="sm">风险及返工缓冲</text>
+      <text weight="medium" tabularNums>{buffer}%</text>
+    </row>
+    <slider min={0} max={50} step={5} value={buffer} onChange={setBuffer}/>
+  </box>
+  <divider color="subtle"/>
+  <box background="rgba(22,163,74,0.08)" radius="lg" padding={3} gap={1}>
+    <text color="secondary" size="sm">建议报价基准</text>
+    <title size="2xl" color="success" tabularNums>{fmt(quote)}</title>
+    <text size="xs" color="secondary">按每周投入 12 小时，预计约 {(hours/12).toFixed(1)} 周完成。</text>
+  </box>
+  <caption>这里的内部工时价值是你对自己时间的定价假设，不代表市场行情。最终报价还应考虑客户可获得的收益、交付责任和你的经验。</caption>
+</box>
+
+
+<box border radius="xl" padding={3} gap={2}>
+  {@body const checklist=["一个完整的业务自动化 Demo","一段 2–3 分钟的演示视频","一页纸的服务介绍和报价范围","一份业务访谈问题清单","一份简洁的 PoC 合同或工作说明书","一份交付验收与效果评估模板"]}
+  {@body const [done,setDone]=DIL.useState([])}
+  <row justify="between" align="center">
+    **首单准备清单**
+    <badge color={done.length===6?"success":"secondary"}>{done.length}/6</badge>
+  </row>
+  {#each checklist as item,i}
+    <checkbox key={i} checked={done.includes(i)} onChange={v=>setDone(old=>v?[...old,i]:old.filter(x=>x!==i))}>{item}</checkbox>
+  {/each}
+</box>
