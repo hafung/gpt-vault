@@ -474,3 +474,97 @@ test('invalid TeX keeps its source and following content without enabling archiv
   await expect(page.locator('.prose img,.prose script,.prose [onerror]')).toHaveCount(0);
   await expect(page.locator('.dil-note')).toHaveCount(0);
 });
+
+
+const editorDirectory = `<box border radius="lg" padding={3} gap={2}>
+  <row align="center" gap={2}>
+    <icon name="folder" color="#D6A34A" size="xl"/>
+    **MyMarkdownEditor/**
+  </row>
+  <box padding={{left:4}} gap={2}>
+    <row align="center" gap={2}>
+      <icon name="file-code" color="success"/>
+      **MyMarkdownEditor.exe**
+      <badge color="success">Native AOT</badge>
+    </row>
+    <row align="center" gap={2}>
+      <icon name="folder" color="#D6A34A"/>
+      **Assets/**
+      <text color="secondary" size="xs">图标、图片、字体等（可选择外置）</text>
+    </row>
+    <row align="center" gap={2}>
+      <icon name="folder" color="#D6A34A"/>
+      **Themes/**
+      <text color="secondary" size="xs">用户可自定义主题</text>
+    </row>
+    <row align="center" gap={2}>
+      <icon name="folder" color="#D6A34A"/>
+      **Plugins/**
+      <text color="secondary" size="xs">插件目录（如果未来支持）</text>
+    </row>
+    <row align="center" gap={2}>
+      <icon name="folder" color="#D6A34A"/>
+      **Templates/**
+      <text color="secondary" size="xs">文档模板</text>
+    </row>
+  </box>
+</box>`;
+
+test('Markdown editor directory preserves compact rows and indentation after expansion', async ({page}) => {
+  await fixture(page, '假设你的 Markdown 编辑器最终发布成这样：\n\n' + editorDirectory + '\n\n后续 **正文**。', {}, true);
+  for (const expanded of [false, true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    const directory = page.locator('.dil-response > .dil-box');
+    await expect(directory.locator('.dil-row')).toHaveCount(6);
+    await expect(directory.locator('.dil-icon svg')).toHaveCount(6);
+    await expect(directory.locator('br')).toHaveCount(0);
+    await expect(directory.locator('strong')).toHaveText(['MyMarkdownEditor/', 'MyMarkdownEditor.exe', 'Assets/', 'Themes/', 'Plugins/', 'Templates/']);
+    await expect(directory.locator('.dil-badge')).toHaveText('Native AOT');
+    await expect(page.locator('.dil-response')).toContainText('后续 正文。');
+    for (const width of [1440, 512, 390]) {
+      await page.setViewportSize({width, height:900});
+      const rows = await directory.locator('.dil-row').evaluateAll(nodes => nodes.map(row => {
+        const icon = row.querySelector('.dil-icon')!.getBoundingClientRect();
+        const label = row.querySelector('strong')!.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        return {direction:getComputedStyle(row).flexDirection, iconLeft:icon.left, iconRight:icon.right, labelLeft:label.left,
+          centers:Math.abs((icon.top+icon.bottom-label.top-label.bottom)/2), height:bounds.height, width:bounds.width, scroll:row.scrollWidth};
+      }));
+      for (const row of rows) {
+        expect(row.direction).toBe('row');
+        expect(row.iconRight).toBeLessThanOrEqual(row.labelLeft);
+        expect(row.centers).toBeLessThan(3);
+        expect(row.scroll).toBeLessThanOrEqual(Math.ceil(row.width));
+      }
+      expect(rows[1].iconLeft-rows[0].iconLeft).toBe(16);
+      if (width >= 512) {
+        expect(await directory.evaluate(el=>el.getBoundingClientRect().height)).toBeLessThan(240);
+        const badge = await directory.locator('.dil-badge').boundingBox();
+        const label = await directory.locator('strong').nth(1).boundingBox();
+        expect(Math.abs(badge!.y+badge!.height/2-label!.y-label!.height/2)).toBeLessThan(3);
+      }
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+      if (!expanded) await directory.screenshot({path:`artifacts/mewui-after-${width}.png`});
+    }
+  }
+});
+
+test('compact rows preserve explicit breaks and leave block Markdown and card rows unchanged', async ({page}) => {
+  await fixture(page, `<row><icon name="folder"/>名称  \n第二行<badge>标记</badge></row>
+<row>第一段。\n\n第二段。</row>
+<row>\n\n\`\`\`text\n<icon name="folder"/>\n\`\`\`\n\n</row>
+<row><box>卡片一</box><box>卡片二</box></row>
+
+普通正文第一行\n普通正文第二行`);
+  const rows = page.locator('.dil-row');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toHaveClass(/dil-row-inline/);
+  await expect(rows.nth(0).locator('br')).toHaveCount(1);
+  for (const i of [1,2,3]) await expect(rows.nth(i)).not.toHaveClass(/dil-row-inline/);
+  await expect(rows.nth(1).locator('p')).toHaveText(['第一段。', '第二段。']);
+  await expect(rows.nth(2).locator('pre code')).toHaveText('<icon name="folder"/>\n');
+  await expect(rows.nth(3).locator('.dil-box')).toHaveCount(2);
+  await expect(page.locator('.dil-response > p br')).toHaveCount(1);
+  await page.setViewportSize({width:390, height:900});
+  expect(await rows.nth(3).evaluate(el=>getComputedStyle(el).flexDirection)).toBe('column');
+});

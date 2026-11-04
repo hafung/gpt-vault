@@ -5,6 +5,7 @@ import { markdownLiteralEnd, mapMarkdownText } from './math';
 import { renderFileLinks, type FileAssets } from './chatgpt-files';
 import { renderChatGPTMarkers } from './chatgpt-markers';
 import { renderChatGPTWriting } from './chatgpt-writing';
+import { createElement, Folder, FileCode } from 'lucide';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -165,13 +166,13 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   const getState = (name: string) => { const index = cursors.get(name) ?? 0; cursors.set(name, index + 1); return queues.get(name)?.[index] ?? {}; };
   const scope = Object.assign(Object.create(null), dil?.appData?.opGenui?.modelDataBindings ?? {}) as Scope;
   let limited = false, count = 0;
-  function markdown(source: string, context: Scope): string {
+  function markdown(source: string, context: Scope, inlineOnly = false): string {
     source = mapMarkdownText(source, prose => prose.replace(/\{([^{}\n]+)\}/g, (raw, expression: string) => {
       const value = staticValue(expression, context);
       if (value === undefined || typeof value === 'object') { limited = true; return '<code>' + esc(raw) + '</code>'; }
       return esc(value).replace(/([\\`*_[\]#])/g, '\\$1');
     }));
-    return marked.parse(source, { async: false }) as string;
+    return inlineOnly ? marked.parseInline(source, { async: false, breaks: false }) as string : marked.parse(source, { async: false }) as string;
   }
   function children(nodes: Part[], context: Scope, nested = true, depth = 0): string {
     if (depth > 40 || count > 5000) { limited = true; return '<p>内容较长，请查看原始内容。</p>'; }
@@ -266,17 +267,32 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
       }
       return urls.length ? `<span class="dil-citations">${urls.filter((v, i, all) => all.findIndex(other => other.url === v.url) === i).map((v, i) => `<a href="${esc(v.url)}" title="${esc(v.title)}">[${i + 1}]</a>`).join(' ')}</span>` : `<span class="dil-citations" title="${esc(refs.join(', '))}">[来源引用]</span>`;
     }
-    if (name === 'icon') return `<span class="dil-icon" aria-hidden="true">${esc(({ 'arrow-down': '↓', 'arrow-right': '→', 'arrow-down-up': '↕', check: '✓', star: '★', zap: 'ϟ' } as Record<string, string>)[text(a.name)] ?? '◇')}</span>`;
+    const presentation = ` data-dil-presentation="${esc(JSON.stringify(Object.fromEntries(['color','weight','size','tabularNums'].filter(key=>a[key] !== undefined).map(key=>[key,a[key]]))))}"`;
+    if (name === 'icon') {
+      const glyph = a.name === 'folder' ? Folder : a.name === 'file-code' ? FileCode : undefined;
+      const svg = glyph ? createElement(glyph) : undefined;
+      if (svg) { svg.setAttribute('width', '1em'); svg.setAttribute('height', '1em'); svg.setAttribute('stroke-width', '1.8'); }
+      return `<span class="dil-icon" aria-hidden="true"${presentation}>${svg?.outerHTML ?? esc(({ 'arrow-down': '↓', 'arrow-right': '→', 'arrow-down-up': '↕', check: '✓', star: '★', zap: 'ϟ' } as Record<string, string>)[text(a.name)] ?? '◇')}</span>`;
+    }
     if (name === 'divider' || name === 'separator') return '<hr>';
-    const content = children(node.children, context, true, depth);
+    // Text-only rows use JSX line breaks as spacing. Keep their items in the
+    // flex row instead of turning each source line into a Markdown hard break.
+    // Rows containing cards, images or block Markdown retain the normal path.
+    const compactRow = name === 'row' && node.children.every(child => typeof child === 'string'
+      ? marked.lexer(dedent(child)).every(token => token.type === 'paragraph' || token.type === 'space') && !/\n\s*\n/.test(child.trim())
+      : inline.has(child.name) || child.name === 'text' || child.name === 'caption');
+    const content = compactRow ? node.children.map(child => {
+      if (typeof child === 'string') return child.trim() ? `<span class="dil-row-copy">${markdown(dedent(child), context, true)}</span>` : '';
+      count++;
+      return element(child, context, depth + 1);
+    }).join('') : children(node.children, context, true, depth);
     const inner = content.replace(/^<p>([\s\S]*)<\/p>\n?$/, '$1');
     if (name === 'link') {
       const state = getState(name), target = a.url ?? a.href ?? state.url;
       const url = typeof target === 'string' && target.startsWith('sandbox:/') ? target : safeRemoteURL(target);
       return url ? `<a href="${esc(url)}">${inner || esc(a.title ?? state.title ?? url)}</a>` : inner || esc(a.title ?? state.title);
     }
-    if (name === 'bold' || name === 'italic' || name === 'badge') { const tag = name === 'bold' ? 'strong' : name === 'italic' ? 'em' : 'span'; return `<${tag} class="dil-${name}">${inner}</${tag}>`; }
-    const presentation = ` data-dil-presentation="${esc(JSON.stringify(Object.fromEntries(['color','weight','size','tabularNums'].filter(key=>a[key] !== undefined).map(key=>[key,a[key]]))))}"`;
+    if (name === 'bold' || name === 'italic' || name === 'badge') { const tag = name === 'bold' ? 'strong' : name === 'italic' ? 'em' : 'span'; return `<${tag} class="dil-${name}"${presentation}>${inner}</${tag}>`; }
     if (name === 'title') return `<h3 class="dil-title"${presentation}>${inner}</h3>`;
     if (name === 'text' || name === 'caption') return `<div class="dil-${name}"${presentation}>${content}</div>`;
     if (name === 'table') return `<div class="dil-table-wrap"><table>${content}</table></div>`;
@@ -290,6 +306,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
       limited = true; return `<div class="dil-static-control">${esc(a.title ?? name)}${content}<small>请在原始内容中查看完整组件</small></div>`;
     }
     const classes = ['dil-layout', 'dil-' + name];
+    if (compactRow) classes.push('dil-row-inline');
     if (a.border) classes.push('dil-bordered');
     if (a.background) classes.push('dil-surface');
     if (a.flex) classes.push('dil-flex');
@@ -321,6 +338,11 @@ export function decorateMessageImages(root: ParentNode): void {
     const scale=(value: unknown)=>typeof value==='number' && Number.isFinite(value) && value>=0 && value<=16 ? `${value*4}px` : undefined;
     const length=(value: unknown)=>typeof value==='string' && /^(?:\d{1,3}(?:\.\d+)?(?:px|%)|auto)$/.test(value) ? value : undefined;
     for(const key of ['padding','gap'] as const) { const value=scale(a[key]); if(value)node.style[key]=value; }
+    if(a.padding && typeof a.padding==='object' && !Array.isArray(a.padding)) {
+      node.style.padding='0';
+      const sides=data(a.padding);
+      for(const side of ['top','right','bottom','left'] as const) { const value=scale(sides[side]); if(value)node.style.setProperty('padding-'+side,value); }
+    }
     for(const key of ['width','height'] as const) { const value=length(a[key]); if(value)node.style[key]=value; }
     const radius=({sm:'4px',md:'6px',lg:'10px',xl:'14px',full:'9999px'} as Record<string,string>)[text(a.radius)];
     if(radius)node.style.borderRadius=radius;
@@ -335,6 +357,8 @@ export function decorateMessageImages(root: ParentNode): void {
     if(a.clip===true)node.style.overflow='hidden';
     if(a.height!==undefined) { node.style.flexShrink='0'; if(!node.textContent?.trim())node.style.minHeight='0'; }
     if(a.color==='secondary')node.style.color='var(--muted)';
+    if(/^#[\da-f]{3,8}$/i.test(text(a.color)))node.style.color=text(a.color);
+    if(a.color==='success')node.classList.add('dil-success');
     const size=({'2xs':'.75em',xs:'.85em',sm:'.93em',lg:'1.2em',xl:'1.5em','2xl':'1.85em'} as Record<string,string>)[text(a.size)];
     if(size)node.style.fontSize=size;
     if(a.weight==='medium')node.style.fontWeight='600';

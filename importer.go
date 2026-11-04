@@ -618,26 +618,26 @@ func (i *Importer) item(db DBQuery, sid string, item M, ordinal int64, ts float6
 	body := ""
 	meta := M{"item_type": typ}
 	var err error
-	switch typ {
-	case "userMessage", "user_message":
+	switch strings.ToLower(typ) {
+	case "usermessage", "user_message":
 		role = "user"
 		body = textContent(first(item["content"], item["message"]))
 		meta["assets"], err = i.assets(db, item["content"], array(item["local_images"]))
-	case "agentMessage", "agent_message":
+	case "agentmessage", "agent_message":
 		role = "assistant"
-		body = str(first(item["text"], item["message"]))
+		body = textContent(first(item["text"], item["message"], item["content"]))
 	case "reasoning":
 		role = "reasoning"
 		body = textContent(item["summary"]) + "\n" + textContent(item["content"])
-	case "commandExecution":
+	case "commandexecution":
 		body = str(item["command"]) + "\n\n" + str(item["aggregatedOutput"])
-	case "fileChange":
+	case "filechange":
 		b, _ := json.MarshalIndent(first(item["changes"], item), "", "  ")
 		body = string(b)
-	case "contextCompaction":
+	case "contextcompaction":
 		role = "context"
 		body = str(first(item["text"], item["message"], "对话上下文已压缩"))
-	case "imageGeneration", "imageView":
+	case "imagegeneration", "imageview":
 		body = str(first(item["revisedPrompt"], item["prompt"], item["path"], "图片"))
 		paths := []any{}
 		for _, k := range []string{"savedPath", "path"} {
@@ -656,18 +656,22 @@ func (i *Importer) item(db DBQuery, sid string, item M, ordinal int64, ts float6
 	if identity == "" {
 		identity = "item:" + str(first(item["id"], ordinal))
 	}
-	// Some versions emit the response before item_completed, others after it.
-	// Give a response already recorded at the same event its stable canonical ID.
-	if role == "user" || role == "assistant" {
-		if _, e := one(db, "SELECT id FROM messages WHERE session_id=? AND identity=?", sid, identity); errors.Is(e, errNotFound) {
-			if twin, e := one(db, "SELECT id FROM messages WHERE session_id=? AND role=? AND body_hash=? AND identity LIKE 'response:%' AND position BETWEEN ? AND ? ORDER BY abs(position-?) LIMIT 1", sid, role, hash([]byte(body)), ordinal-2, ordinal+2, ordinal); e == nil {
-				if _, e = db.Exec("UPDATE messages SET identity=? WHERE id=?", identity, twin["id"]); e != nil {
-					return false, e
-				}
+	if role == "user" {
+		if previous, e := one(db, "SELECT metadata FROM messages WHERE session_id=? AND identity=?", sid, identity); e == nil {
+			var oldMeta M
+			if e = json.Unmarshal([]byte(str(previous["metadata"])), &oldMeta); e != nil {
+				return false, e
 			}
+			meta["assets"] = mergeCodexAssets(array(meta["assets"]), array(oldMeta["assets"]))
+		} else if !errors.Is(e, errNotFound) {
+			return false, e
 		}
 	}
-	return i.Store.message(db, sid, identity, ordinal, role, body, ts, typ, str(item["phase"]), meta)
+	changed, err := i.Store.message(db, sid, identity, ordinal, role, body, ts, typ, str(item["phase"]), meta)
+	if err == nil && (role == "user" || role == "assistant") {
+		err = i.Store.reconcileCodexMirrors(db, sid, ordinal)
+	}
+	return changed, err
 }
 func (i *Importer) response(db DBQuery, sid string, p M, ordinal int64, ts float64) (bool, error) {
 	typ := str(p["type"])
@@ -679,6 +683,9 @@ func (i *Importer) response(db DBQuery, sid string, p M, ordinal int64, ts float
 	case "message":
 		role = str(p["role"])
 		body = textContent(p["content"])
+		if role == "user" {
+			body = codexResponseText(p["content"])
+		}
 		if role != "user" && role != "assistant" {
 			role = "context"
 		}
@@ -710,20 +717,17 @@ func (i *Importer) response(db DBQuery, sid string, p M, ordinal int64, ts float
 	if err != nil {
 		return false, err
 	}
-	if role == "user" || role == "assistant" {
-		if _, e := one(db, "SELECT id FROM messages WHERE session_id=? AND role=? AND body_hash=? AND identity LIKE 'item:%' AND position BETWEEN ? AND ? LIMIT 1", sid, role, hash([]byte(body)), ordinal-2, ordinal+2); e == nil {
-			return false, nil
-		} else if !errors.Is(e, errNotFound) {
-			return false, e
-		}
-	}
 	if call := str(p["call_id"]); call != "" {
 		if _, e := one(db, "SELECT id FROM messages WHERE session_id=? AND identity=?", sid, "item:"+call); e == nil {
 			return false, nil
 		}
 	}
 	identity := fmt.Sprintf("response:%d:%s", ordinal, hash([]byte(body))[:20])
-	return i.Store.message(db, sid, identity, ordinal, role, body, ts, typ, str(p["phase"]), meta)
+	changed, err := i.Store.message(db, sid, identity, ordinal, role, body, ts, typ, str(p["phase"]), meta)
+	if err == nil && (role == "user" || role == "assistant") {
+		err = i.Store.reconcileCodexMirrors(db, sid, ordinal)
+	}
+	return changed, err
 }
 func (i *Importer) rollout(entry rolloutFile, metadata map[string]M, full bool) error {
 	i.Store.importMu.Lock()
@@ -878,14 +882,14 @@ func (i *Importer) rollout(entry rolloutFile, metadata map[string]M, full bool) 
 			if d.Type == "event_msg" && str(p["type"]) == "item_completed" {
 				item := obj(p["item"])
 				changed, e = i.item(tx, sid, item, ordinal, ts, "")
-				if str(item["type"]) == "userMessage" && firstUser == "" {
+				if strings.EqualFold(str(item["type"]), "userMessage") && firstUser == "" {
 					firstUser = textContent(item["content"])
 				}
 			}
 			if d.Type == "response_item" {
 				changed, e = i.response(tx, sid, p, ordinal, ts)
 				if str(p["role"]) == "user" && firstUser == "" {
-					t := textContent(p["content"])
+					t := codexResponseText(p["content"])
 					if !strings.HasPrefix(strings.TrimSpace(t), "# AGENTS.md") && !strings.HasPrefix(strings.TrimSpace(t), "<environment_context>") {
 						firstUser = t
 					}
