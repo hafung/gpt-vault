@@ -1,0 +1,36 @@
+{@body const [character,setCharacter]=DIL.useState("双马尾黑发，23岁东亚女性")}
+{@body const [preset,setPreset]=DIL.useState("commercial-beauty")}
+{@body const [outfit,setOutfit]=DIL.useState("白色衬衫")}
+{@body const [scene,setScene]=DIL.useState("沿用摄影预设的默认场景")}
+{@body const presetNames={"commercial-beauty":"A — 高级商业人像","natural-lifestyle":"B — 自然生活摄影","fashion-editorial":"C — 时尚杂志大片","soft-window-light":"D — 窗边柔光人像","golden-hour":"E — 户外黄金时刻","character-reference":"F — 角色参考摄影","cinematic-portrait":"G — 电影感人像"}}
+<box border radius="xl" padding={3} gap={3}>
+  <title size="lg">Preset 配置组合器</title>
+  <box gap={1}>
+    <label>人物设定</label>
+    <input value={character} onChange={setCharacter}/>
+  </box>
+  <box gap={1}>
+    <label>摄影预设</label>
+    <select block value={preset} onChange={setPreset} options={Object.entries(presetNames).map(([value,label])=>({value,label}))}/>
+  </box>
+  <box gap={1}>
+    <label>服装</label>
+    <input value={outfit} onChange={setOutfit}/>
+  </box>
+  <box gap={1}>
+    <label>场景覆盖（可选）</label>
+    <input value={scene} onChange={setScene}/>
+  </box>
+  <divider color="subtle"/>
+  **组合结果**
+  <box background="surface-secondary" radius="md" padding={3} gap={2}>
+    <text weight="medium">{presetNames[preset]}</text>
+    <text size="sm">人物：{character}</text>
+    <text size="sm">服装：{outfit}</text>
+    <text size="sm">场景：{scene}</text>
+    <caption>自动组合时，摄影预设的其他变量及 Master Prompt 全局约束继续生效。</caption>
+  </box>
+  <button block onClick={()=>GenUI.copy(`CHARACTER:\n${character}\n\nPHOTOGRAPHY_PRESET:\n${preset}\n\nOUTFIT:\n${outfit}\n\nSCENE_OVERRIDE:\n${scene}\n\nApply the selected preset to the complete Young Woman Master Prompt. Preserve all global beauty, skin, anatomy and photorealism constraints.`)}>
+    <icon name="copy" size="sm"/> 复制配置
+  </button>
+</box>

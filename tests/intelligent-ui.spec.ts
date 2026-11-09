@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 
 const session = { id: 'dil-fixture', title: 'Intelligent UI 归档', project: 'ChatGPT', cwd: '', provider: 'ChatGPT', platform: 'Windows', model: 'GPT', favorite: 0, message_count: 1, total_count: 1, created: 1767225600, updated: 1767225600 };
 
-async function fixture(page: import('@playwright/test').Page, body: string, metadata = {}, truncated = false, expanded = body) {
+async function fixture(page: import('@playwright/test').Page, body: string, metadata = {}, truncated = false, expanded = body, provider = 'ChatGPT') {
   await page.route('**/*', async route=>{
     const url=new URL(route.request().url());
     if(route.request().resourceType()==='document')return route.fulfill({body:await readFile(resolve('dist/index.html')),contentType:'text/html'});
@@ -16,7 +16,7 @@ async function fixture(page: import('@playwright/test').Page, body: string, meta
     if (path.startsWith('/api/assets/')) return route.fulfill({contentType:'image/png', body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64')});
     if (path === '/api/stats') return route.fulfill({ json: { sessions: 1, messages: 1, events: 1, projects: 1, favorites: 0, projects_list: [], platforms: [], providers: [], last_sync: 1, db_bytes: 0, raw_bytes: 0 } });
     if (path === '/api/messages/1') return route.fulfill({ json: { body: expanded } });
-    if (path === '/api/sessions/dil-fixture') return route.fulfill({ json: { session, offset: 0, total: 1, more: false, items: [{ id: 1, role: 'assistant', kind: 'message', phase: '', timestamp: session.created, body, metadata, truncated, length: 25000 }] } });
+    if (path === '/api/sessions/dil-fixture') return route.fulfill({ json: { session: {...session,provider}, offset: 0, total: 1, more: false, items: [{ id: 1, role: 'assistant', kind: 'message', phase: '', timestamp: session.created, body, metadata, truncated, length: 25000 }] } });
     if (path === '/api/sessions') return route.fulfill({ json: { items: [], more: false, offset: 0, elapsed_ms: 0 } });
     if (path === '/api/sync') return route.fulfill({ json: { running: false, started: 1, finished: 1, errors: [], warnings: [], done: 0, total: 0, imported: 0, skipped: 0 } });
     return route.fulfill({ json: {} });
@@ -642,4 +642,218 @@ test('unsupported control handlers and hostile function calls cannot execute arc
   await page.getByRole('checkbox', {name:'危险处理器'}).check();
   expect(await page.evaluate(()=> 'xss' in window)).toBeFalsy();
   await expect(page.locator('.prose script,.prose [onchange],.prose [oninput]')).toHaveCount(0);
+});
+
+test('archived Preset combiner supports typing, seven presets and copying current configuration', async ({page}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {value:{writeText:async (text:string)=>{(window as unknown as {copied:string}).copied=text;}}});
+  });
+  const combiner = await readFile(resolve('tests/fixtures/preset-combiner.txt'), 'utf8');
+  const body = '前文 **保留**。\n\n' + combiner + '\n\n后文 **保留**。\n\n' + String.raw`\(x^2\)` + '\n\n```html\n<input value={character}/>\n```';
+  await fixture(page, body, {}, true, body+'\n\n完整正文。');
+  for (const expanded of [false,true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    await expect(page.getByLabel('人物设定',{exact:true})).toHaveValue('双马尾黑发，23岁东亚女性');
+    const select = page.getByLabel('摄影预设',{exact:true});
+    await expect(select.locator('option')).toHaveCount(7);
+    await expect(select).toHaveValue('commercial-beauty');
+    await page.getByRole('button',{name:'复制配置',exact:true}).click();
+    await expect(page.locator('.dil-copy-status')).toHaveText('已复制');
+    expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toContain('PHOTOGRAPHY_PRESET:\ncommercial-beauty');
+    const character=page.getByLabel('人物设定',{exact:true});
+    await character.fill('人物');
+    await character.press('Home');
+    await page.keyboard.insertText('新');
+    await expect(character).toHaveValue('新人物');
+    expect(await character.evaluate((node:HTMLInputElement)=>node.selectionStart)).toBe(1);
+    await character.evaluate((node:HTMLInputElement)=>{
+      node.dispatchEvent(new CompositionEvent('compositionstart'));
+      node.value='新人物输入中';
+      node.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true}));
+    });
+    await expect(page.locator('.dil-text').nth(1)).toHaveText('人物：新人物');
+    await character.dispatchEvent('compositionend');
+    await expect(page.locator('.dil-text').nth(1)).toHaveText('人物：新人物输入中');
+    await character.fill('短发成年女性 <img src=x onerror=alert(1)>');
+    await expect(character).toBeFocused();
+    await select.selectOption('golden-hour');
+    await page.getByLabel('服装',{exact:true}).fill('蓝色连衣裙');
+    await page.getByLabel('场景覆盖（可选）',{exact:true}).fill('海边落日');
+    await expect(page.locator('.dil-text').first()).toHaveText('E — 户外黄金时刻');
+    await expect(page.locator('.dil-text').nth(1)).toHaveText('人物：短发成年女性 <img src=x onerror=alert(1)>');
+    await page.getByRole('button',{name:'复制配置',exact:true}).click();
+    expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toBe('CHARACTER:\n短发成年女性 <img src=x onerror=alert(1)>\n\nPHOTOGRAPHY_PRESET:\ngolden-hour\n\nOUTFIT:\n蓝色连衣裙\n\nSCENE_OVERRIDE:\n海边落日\n\nApply the selected preset to the complete Young Woman Master Prompt. Preserve all global beauty, skin, anatomy and photorealism constraints.');
+    await expect(page.locator('.prose img,.prose script,.prose [onerror]')).toHaveCount(0);
+    await expect(page.locator('.prose math')).toHaveCount(1);
+    await expect(page.locator('.prose pre code').first()).toHaveText('<input value={character}/>\n');
+    await expect(page.locator('.dil-note,.dil-static-control')).toHaveCount(0);
+    await expect(page.locator('.prose')).toContainText('后文 保留。');
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+    }
+    if (expanded) {
+      await page.setViewportSize({width:390,height:1400});
+      await page.locator('.dil-title').scrollIntoViewIfNeeded();
+      await page.locator('.dil-title').locator('..').screenshot({path:'artifacts/preset-combiner-mobile.png'});
+    }
+  }
+});
+
+test('original realism scorecard updates totals, verdicts, progress, reset and copied scores', async ({page}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as unknown as {copied:string}).copied=text;}}});
+  });
+  const body = await readFile(resolve('tests/fixtures/realism-scorecard.txt'),'utf8');
+  await fixture(page,body+'\n\n后文 **保留**。\n\n'+String.raw`\(x^2\)`,{},true,body+'\n\n展开后 **保留**。\n\n'+String.raw`\(x^2\)`);
+  for (const expanded of [false,true]) {
+    if (expanded) await page.locator('.expand-message').click();
+    const card=page.locator('.dil-title').filter({hasText:'交互式真实感评分表'}).locator('../../..');
+    const sliders=card.locator('.dil-slider'), total=card.locator('.dil-title:has(> .dil-inline)'), badge=card.locator('.dil-badge');
+    const progress=card.locator('[data-dil-layout*="100%"]');
+    await expect(sliders).toHaveCount(7);
+    await expect(total).toHaveText('80/100');
+    await expect(badge).toHaveText('较为可信');
+    await expect(card.locator('code,.dil-note,.dil-static-control')).toHaveCount(0);
+    const math=await page.locator('math').evaluate(node=>node.outerHTML);
+    await sliders.first().focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(sliders.first()).toBeFocused();
+    await expect(total).toHaveText('79/100');
+    await sliders.first().fill('13');await sliders.nth(1).fill('14');
+    await expect(total).toHaveText('75/100');
+    await expect(badge).toHaveClass(/dil-info/);
+    await expect(progress).toHaveCSS('background-color','rgb(59, 130, 246)');
+    expect(await progress.evaluate(el=>(el as HTMLElement).style.width)).toBe('75%');
+    await card.getByRole('button',{name:'复制评分',exact:true}).click();
+    expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toBe('人体、几何和透视: 13/20\n光照与反射: 14/20\n材料与微观纹理: 16/20\n相机与景深: 8/10\n场景与现实常识: 12/15\n色彩真实性: 8/10\n后期自然度: 4/5\n总分: 75/100');
+    for (const [values,score,verdict,color] of [
+      [[20,20,20,10,15,10,5],100,'表现优秀','rgb(22, 163, 74)'],
+      [[10,20,20,10,15,10,5],90,'表现优秀','rgb(22, 163, 74)'],
+      [[0,10,20,10,15,0,5],60,'需要优化','rgb(217, 119, 6)'],
+      [[0,9,20,10,15,0,5],59,'优先修复','rgb(220, 38, 38)'],
+      [[0,0,0,0,0,0,0],0,'优先修复','rgb(220, 38, 38)'],
+    ] as const) {
+      for(let i=0;i<values.length;i++)await sliders.nth(i).fill(String(values[i]));
+      await expect(total).toHaveText(`${score}/100`);
+      await expect(badge).toHaveText(verdict);
+      await expect(progress).toHaveCSS('background-color',color);
+      expect(await progress.evaluate(el=>(el as HTMLElement).style.width)).toBe(`${score}%`);
+    }
+    await card.getByRole('button',{name:'重置',exact:true}).click();
+    await expect(total).toHaveText('80/100');
+    await expect(badge).toHaveText('较为可信');
+    await expect(badge).toHaveClass(/dil-info/);
+    await expect(badge).not.toHaveClass(/dil-danger|dil-success|dil-warning/);
+    expect(await sliders.evaluateAll(nodes=>nodes.map(node=>(node as HTMLInputElement).value))).toEqual(['16','16','16','8','12','8','4']);
+    await card.getByRole('button',{name:'复制评分',exact:true}).click();
+    expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toContain('总分: 80/100');
+    expect(await page.locator('math').evaluate(node=>node.outerHTML)).toBe(math);
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:1400});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+      const bounds=await total.evaluate(el=>({title:el.getBoundingClientRect().toJSON(),unit:el.querySelector('.dil-inline')!.getBoundingClientRect().toJSON()}));
+      expect(bounds.unit.x).toBeGreaterThan(bounds.title.x);
+      expect(bounds.unit.bottom).toBeLessThanOrEqual(bounds.title.bottom);
+      if(expanded) {
+        await page.mouse.move(width-1,0);
+        await card.screenshot({path:`artifacts/realism-scorecard-${width}.png`});
+        if(width===390)await page.screenshot({path:'artifacts/realism-scorecard-page.png'});
+      }
+    }
+  }
+});
+
+test('archived Mermaid flowcharts and sequence diagrams render locally, switch source, copy and survive expansion', async ({page}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as unknown as {copied:string}).copied=text;}}});
+  });
+  const graphs=await readFile(resolve('tests/fixtures/project-review-mermaid.md'),'utf8');
+  const body='前文 **保留**。\n\n'+graphs+'\n\n后文 **保留**。\n\n'+String.raw`\(x^2\)`+'\n\n```typescript\nconst keep = "flowchart TD";\n```\n\n````markdown\n```mermaid\nflowchart TD\n A-->B\n```\n````';
+  const external:string[]=[];
+  page.on('request',request=>{const url=new URL(request.url());if(['http:','https:'].includes(url.protocol)&&!['localhost','127.0.0.1'].includes(url.hostname))external.push(request.url());});
+  await fixture(page,body,{},true,body+'\n\n完整正文。');
+  for (const expanded of [false,true]) {
+    await page.setViewportSize({width:1440,height:1400});
+    if(expanded)await page.locator('.expand-message').click();
+    const blocks=page.locator('.mermaid-block');
+    await expect(blocks).toHaveCount(4);
+    for(const block of await blocks.all()) {
+      const image=block.locator('.mermaid-preview img');
+      await expect(image).toBeVisible({timeout:20000});
+      await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
+      await expect(block.locator('.mermaid-source')).toBeHidden();
+      await expect(block.getByRole('button',{name:'图表',exact:true})).toHaveAttribute('aria-pressed','true');
+    }
+    await expect(blocks.last().locator('.mermaid-kind')).toHaveText('时序图');
+    const chart=blocks.nth(2), source=chart.locator('pre code');
+    await chart.getByRole('button',{name:'源码',exact:true}).click();
+    await expect(source).toBeVisible();
+    await expect(source).toContainText('Journal 中有完成结果？');
+    const exact=await source.textContent();
+    await chart.getByRole('button',{name:'复制源码',exact:true}).click();
+    expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toBe(exact);
+    await expect(chart.locator('.mermaid-status')).toHaveText('源码已复制');
+    await chart.getByRole('button',{name:'图表',exact:true}).click();
+    await chart.getByRole('button',{name:'放大图表',exact:true}).click();
+    expect(await chart.locator('img').evaluate(img=>img.style.width)).toBe('125%');
+    await chart.getByRole('button',{name:'缩小图表',exact:true}).click();
+    expect(await chart.locator('img').evaluate(img=>img.style.width)).toBe('100%');
+    const before=await chart.locator('img').getAttribute('src');
+    await page.locator('#theme').click();
+    await expect.poll(()=>chart.locator('img').getAttribute('src')).not.toBe(before);
+    await expect.poll(()=>chart.locator('img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
+    const imageAfterTheme=await chart.locator('img').getAttribute('src');
+    await page.locator('#session-search').click();
+    await page.locator('#local-query').fill('Journal');
+    await expect(chart).toHaveClass(/diagram-search-hit/);
+    expect(await chart.locator('img').getAttribute('src')).toBe(imageAfterTheme);
+    await expect(chart.locator('mark')).toHaveCount(0);
+    await page.locator('#close-local-search').click();
+    await expect(chart).not.toHaveClass(/diagram-search-hit/);
+    await expect(page.locator('math')).toHaveCount(1);
+    await expect(page.locator('.prose > pre code')).toHaveText(['const keep = "flowchart TD";\n','```mermaid\nflowchart TD\n A-->B\n```\n']);
+    await expect(page.locator('.prose')).toContainText('后文 保留。');
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:1400});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+      if(expanded) {
+        await chart.screenshot({path:`artifacts/mermaid-flowchart-${width}.png`});
+        if(width===1440)await blocks.last().screenshot({path:'artifacts/mermaid-sequence.png'});
+      }
+    }
+  }
+  expect(external).toEqual([]);
+});
+
+test('invalid Mermaid keeps exact source and hostile directives cannot enable archived scripts or links', async ({page}) => {
+  await page.addInitScript(() => { Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as unknown as {copied:string}).copied=text;}}}); });
+  const invalid='flowchart TD\n  A["unfinished';
+  const hostile='%%{init: {"securityLevel":"loose","htmlLabels":true,"themeCSS":"body { display: none }"}}%%\nflowchart TD\n A["<img src=x onerror=window.xss=1>"] --> B["保留正文"]\n click B "javascript:window.xss=1"';
+  await fixture(page,'```mermaid\n'+invalid+'\n```\n\n```mermaid\n'+hostile+'\n```\n\n末尾 **保留**。');
+  const bad=page.locator('.mermaid-block').first(), good=page.locator('.mermaid-block').last();
+  await expect(bad.locator('.mermaid-status')).toHaveText('图表暂时无法渲染，可查看或复制源码。',{timeout:20000});
+  await expect(bad.locator('pre code')).toHaveText(invalid+'\n');
+  await expect(bad.getByRole('button',{name:'图表',exact:true})).toBeDisabled();
+  await bad.getByRole('button',{name:'复制源码',exact:true}).click();
+  expect(await page.evaluate(()=>(window as unknown as {copied:string}).copied)).toBe(invalid+'\n');
+  await expect(good.locator('.mermaid-preview img')).toBeVisible({timeout:20000});
+  expect(await page.evaluate(()=>'xss' in window)).toBeFalsy();
+  await expect(page.locator('.prose script,.prose [onerror],.mermaid-preview a,.prose iframe')).toHaveCount(0);
+  await expect(page.locator('.prose')).toContainText('末尾 保留。');
+});
+
+test('Mermaid supports other conversations and survives local DIL state updates', async ({page}) => {
+  await fixture(page,'```Mermaid\npie title 资源分配\n "研发" : 60\n "运营" : 40\n```',{},false,undefined,'Codex');
+  await expect(page.locator('.mermaid-preview img')).toBeVisible({timeout:20000});
+  await expect.poll(()=>page.locator('.mermaid-preview img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
+  await page.unrouteAll({behavior:'wait'});
+  const body='{@body const [v,setV]=DIL.useState(5)}\n<box>\n<text>当前值：{v}</text>\n<slider value={v} max={10} onChange={setV}/>\n\n```mermaid\nflowchart TD\n A[开始]-->B[完成]\n```\n</box>';
+  await fixture(page,body);
+  await expect(page.locator('.dil-response .mermaid-preview img')).toBeVisible({timeout:20000});
+  await page.locator('.dil-slider').fill('8');
+  await expect(page.locator('.dil-text')).toHaveText('当前值：8');
+  await expect(page.locator('.mermaid-block')).toHaveCount(1);
+  await expect(page.locator('.dil-response .mermaid-preview img')).toBeVisible({timeout:20000});
+  await expect.poll(()=>page.locator('.mermaid-preview img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
 });

@@ -16,14 +16,16 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
   source = source.trim();
   if (source.startsWith('`') && source.endsWith('`')) {
     let valid = true;
-    const value = source.slice(1, -1).replace(/\$\{([^{}]+)\}/g, (_, expression: string) => {
+    const template = source.slice(1, -1);
+    const value = template.replace(/\$\{([^{}]+)\}|\\([nrt`\\$])/g, (_, expression: string | undefined, escaped: string) => {
+      if (expression === undefined) return ({ n: '\n', r: '\r', t: '\t' }[escaped] ?? escaped);
       const result = staticValue(expression, scope, budget);
       if (typeof result !== 'string' && typeof result !== 'number') { valid = false; return ''; }
       return String(result);
     });
-    return valid && !value.includes('${') ? value : undefined;
+    return valid && !template.replace(/\\.|\$\{[^{}]+\}/g, '').includes('${') ? value : undefined;
   }
-  const tokens = source.match(/\s+|(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(?:\d+(?:\.\d+)?)|(?:[A-Za-z_$][\w$]*)|(?:=>|\.\.\.|===|!==|==|!=|>=|<=|&&|\|\||\?\?)|./g)?.filter(t => !/^\s+$/.test(t)) || [];
+  const tokens = source.match(/\s+|(?:`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(?:\d+(?:\.\d+)?)|(?:[A-Za-z_$][\w$]*)|(?:=>|\.\.\.|===|!==|==|!=|>=|<=|&&|\|\||\?\?)|./g)?.filter(t => !/^\s+$/.test(t)) || [];
   if (tokens.length > 2000) return undefined;
   let i = 0, depth = 0, active = true;
   const precedence: Record<string, number> = { '??': 1, '||': 1, '&&': 2, '===': 3, '!==': 3, '==': 3, '!=': 3, '>': 4, '<': 4, '>=': 4, '<=': 4, '+': 5, '-': 5, '*': 6, '/': 6, '%': 6 };
@@ -45,8 +47,8 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
     const token = tokens[i++];
     let result: unknown;
     const arrow = token === '(' ? tokens.indexOf(')', i) : i;
-    if ((token === '(' && arrow >= i && tokens[arrow + 1] === '=>' && tokens.slice(i, arrow).every(t => /^[\w$]+$/.test(t) || t === ',')) || tokens[i] === '=>') {
-      const params = token === '(' ? tokens.slice(i, arrow).filter(t => t !== ',') : [token];
+    if ((token === '(' && arrow >= i && tokens[arrow + 1] === '=>' && tokens.slice(i, arrow).join(' ').match(/^(?:[\w$]+|\[\s*[\w$]+(?:\s*,\s*[\w$]+)*\s*\])?(?:\s*,\s*[\w$]+)*$/)) || tokens[i] === '=>') {
+      const params = token === '(' ? tokens.slice(i, arrow).join(' ').match(/\[[^\]]+\]|[\w$]+/g) ?? [] : [token];
       i = token === '(' ? arrow + 2 : i + 1;
       const start = i; let nesting = 0;
       while (i < tokens.length) {
@@ -59,7 +61,7 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
       const body = tokens.slice(start, i).join(' ');
       result = dilFunction(args => {
         if (++budget.calls > 40) return undefined;
-        try { return staticValue(body, Object.assign(Object.create(null), scope, Object.fromEntries(params.map((p, n) => [p, args[n]]))), budget); }
+        try { return staticValue(body, Object.assign(Object.create(null), scope, Object.fromEntries(params.flatMap((p, n) => p.startsWith('[') ? (p.match(/[\w$]+/g) ?? []).map((key, index) => [key, Array.isArray(args[n]) ? args[n][index] : undefined]) : [[p, args[n]]]))), budget); }
         finally { budget.calls--; }
       });
     }
@@ -71,15 +73,17 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
       take(']'); result = values;
     } else if (token === '{') {
       const values = Object.create(null) as Scope;
-      while (i < tokens.length && tokens[i] !== '}') { const name = key(); take(':'); values[name] = expression(); if (tokens[i] !== ',') break; i++; }
+      while (i < tokens.length && tokens[i] !== '}') { const name = key(); if (tokens[i] === ':') { i++; values[name] = expression(); } else if (Object.hasOwn(scope, name)) values[name] = scope[name]; else throw new Error('Unknown property'); if (tokens[i] !== ',') break; i++; }
       take('}'); result = values;
     } else if (token === '!' || token === '-' || token === '+') {
       const value = atom(); result = token === '!' ? !value : token === '-' ? -Number(value) : Number(value);
-    } else if (/^['"]/.test(token || '')) result = string(token);
+    } else if (token?.startsWith('`')) result = staticValue(token, scope, budget);
+    else if (/^['"]/.test(token || '')) result = string(token);
     else if (/^\d/.test(token || '')) result = Number(token);
     else if (token === 'true' || token === 'false') result = token === 'true';
     else if (token === 'null') result = null;
     else if (token === 'Math') result = math;
+    else if (token === 'Object') result = object;
     else if (token && !forbidden.has(token) && Object.hasOwn(scope, token)) result = scope[token];
     else if (active) throw new Error('Unknown value');
     while (tokens[i] === '.' || tokens[i] === '[' || tokens[i] === '(') {
@@ -96,6 +100,21 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
       if (typeof receiver === 'number' && property === 'toFixed') result = dilFunction(args => receiver.toFixed(Math.max(0, Math.min(20, Number(args[0]) || 0))));
       else if (typeof receiver === 'number' && property === 'toLocaleString') result = dilFunction(args => receiver.toLocaleString(['zh-CN', 'en-US'].includes(String(args[0])) ? String(args[0]) : 'zh-CN'));
       else if (Array.isArray(receiver) && receiver.length <= 1000 && property === 'includes') result = dilFunction(args => receiver.includes(args[0]));
+      else if (Array.isArray(receiver) && receiver.length <= 1000 && property === 'map') result = dilFunction(args => receiver.map((v, index) => { if (--budget.steps < 0) throw new Error('Value budget exceeded'); return callDil(args[0], [v, index]); }));
+      else if (Array.isArray(receiver) && receiver.length <= 1000 && property === 'reduce') result = dilFunction(args => {
+        if (!isDilFunction(args[0])) return undefined;
+        let accumulator = args.length > 1 ? args[1] : receiver[0];
+        for (let index = args.length > 1 ? 0 : 1; index < receiver.length; index++) {
+          if (--budget.steps < 0) throw new Error('Value budget exceeded');
+          accumulator = callDil(args[0], [accumulator, receiver[index], index]);
+        }
+        return accumulator;
+      });
+      else if (Array.isArray(receiver) && receiver.length <= 1000 && property === 'join') result = dilFunction(args => {
+        if (!receiver.every(value => value == null || ['string', 'number', 'boolean'].includes(typeof value))) return undefined;
+        if (args[0] !== undefined && typeof args[0] !== 'string') return undefined;
+        return receiver.join(args[0] as string | undefined);
+      });
       else if (Array.isArray(receiver) && receiver.length <= 1000 && property === 'filter') result = dilFunction(args => receiver.filter((v, index) => { if (--budget.steps < 0) throw new Error('Value budget exceeded'); return !!callDil(args[0], [v, index]); }));
       else if (Array.isArray(result) && property === 'length') result = result.length;
       else if (result !== null && typeof result === 'object' && Object.hasOwn(result, property)) result = (result as Scope)[property];
@@ -133,6 +152,7 @@ export function staticValue(source: string, scope: Scope, budget = { steps: 1200
     }
     return left;
   }
+  const object = { entries: dilFunction(([value]) => value !== null && typeof value === 'object' && Object.keys(value).length <= 1000 ? Object.entries(value).filter(([key]) => !forbidden.has(key)) : undefined) };
   const math = Object.fromEntries(Object.entries(mathMethods).map(([name, fn]) => [name, dilFunction(args => fn(...args.map(Number)))]));
   try { const result = expression(); return i === tokens.length && !(typeof result === 'number' && !Number.isFinite(result)) ? result : undefined; }
   catch { return undefined; }

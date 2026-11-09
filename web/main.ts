@@ -279,7 +279,7 @@ function decorateProse() {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); const nodes: Text[] = [];
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (node.parentElement?.closest('.prose') && !node.parentElement.closest('a, button, code, pre, math, .rendered-math')) nodes.push(node);
+    if (node.parentElement?.closest('.prose') && !node.parentElement.closest('a, button, code, pre, math, .rendered-math, .mermaid-block')) nodes.push(node);
   }
   for (const node of nodes) {
     const text = node.textContent || ''; const fragment = document.createDocumentFragment(); let last = 0;
@@ -299,7 +299,7 @@ function decorateProse() {
     const body = button.closest('.chatgpt-writing')?.querySelector<HTMLElement>('.chatgpt-writing-body');
     if (body) navigator.clipboard.writeText(body.innerText.trim()).then(() => toast('写作内容已复制')).catch(handle);
   });
-  root.querySelectorAll<HTMLElement>('.prose pre').forEach(pre => { if (pre.querySelector('.code-copy')) return; const button = document.createElement('button'); button.className = 'code-copy'; button.title = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.innerHTML = icon('Copy'); button.onclick = () => navigator.clipboard.writeText(pre.querySelector('code')?.textContent || '').then(() => toast('代码已复制')).catch(handle); pre.prepend(button); });
+  root.querySelectorAll<HTMLElement>('.prose pre').forEach(pre => { if (pre.closest('.mermaid-block') || pre.querySelector('.code-copy')) return; const button = document.createElement('button'); button.className = 'code-copy'; button.title = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.innerHTML = icon('Copy'); button.onclick = () => navigator.clipboard.writeText(pre.querySelector('code')?.textContent || '').then(() => toast('代码已复制')).catch(handle); pre.prepend(button); });
   root.querySelectorAll<HTMLButtonElement>('.copy-message').forEach(b => b.onclick = async () => { try { const data = await api<{ body: string }>('/messages/' + b.dataset.mid); await navigator.clipboard.writeText(data.body); toast('消息已复制'); } catch (error) { handle(error); } });
   root.querySelectorAll<HTMLButtonElement>('.expand-message').forEach(b => b.onclick = async () => { try { b.disabled = true; const data = await api<{ body: string }>('/messages/' + b.dataset.mid); const prose = $(`[data-body="${b.dataset.mid}"]`,root); const message = state.page?.items.find(item => String(item.id) === b.dataset.mid); prose.innerHTML = renderMessageContent(data.body, message?.metadata.chatgpt_ui, state.session?.provider === 'ChatGPT', message?.metadata.image_assets, message?.metadata.file_assets); b.remove(); decorateProse(); markReader(); } catch (error) { b.disabled = false; handle(error); } });
   decorateMessageImages(root);
@@ -308,13 +308,15 @@ function decorateProse() {
 function markReader() {
   const root = $('#messages'); if (!root) return;
   root.querySelectorAll('mark').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+  root.querySelectorAll('.diagram-search-hit').forEach(diagram => diagram.classList.remove('diagram-search-hit'));
   root.querySelectorAll('.math-search-hit').forEach(math => math.classList.remove('math-search-hit'));
   const terms = (state.localQuery || state.q).match(/"[^"]+"|\S+/g)?.map(t => t.replace(/^"|"$/g,'')) || [];
   if (!terms.length) return;
   const pattern = new RegExp(terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'gi');
   root.querySelectorAll('.rendered-math').forEach(math => { pattern.lastIndex = 0; if (pattern.test(math.textContent || '')) math.classList.add('math-search-hit'); });
+  root.querySelectorAll('.mermaid-block').forEach(diagram => { pattern.lastIndex = 0; if (pattern.test(diagram.querySelector('code')?.textContent || '')) diagram.classList.add('diagram-search-hit'); });
   const walker = document.createTreeWalker(root,NodeFilter.SHOW_TEXT); const nodes: Text[] = [];
-  while(walker.nextNode()) { const node = walker.currentNode as Text; if (node.parentElement?.closest('.prose') && !node.parentElement.closest('button:not(.local-path-link), math, .rendered-math')) nodes.push(node); }
+  while(walker.nextNode()) { const node = walker.currentNode as Text; if (node.parentElement?.closest('.prose') && !node.parentElement.closest('button:not(.local-path-link), math, .rendered-math, .mermaid-block')) nodes.push(node); }
   let count = 0;
   for (const node of nodes) { pattern.lastIndex = 0; const text = node.textContent || ''; if (!pattern.test(text)) continue; pattern.lastIndex = 0; const fragment = document.createDocumentFragment(); let last = 0; for (const match of text.matchAll(pattern)) { if (++count > 1000) break; fragment.append(document.createTextNode(text.slice(last,match.index))); const mark = document.createElement('mark'); mark.textContent = match[0]; fragment.append(mark); last = match.index!+match[0].length; } fragment.append(document.createTextNode(text.slice(last))); node.replaceWith(fragment); if (count > 1000) break; }
 }

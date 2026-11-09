@@ -45,3 +45,31 @@ test('recursive expressions stop within the evaluation budget', () => {
   assert.equal(staticValue('repeat(0)', scope), undefined);
   assert.equal(staticValue('('.repeat(100) + '1' + ')'.repeat(100), scope), undefined);
 });
+
+test('preset options map object entries through array parameter destructuring', () => {
+  const presetNames = {'commercial-beauty':'A — 高级商业人像','golden-hour':'E — 户外黄金时刻'};
+  assert.deepEqual(staticValue('Object.entries(presetNames).map(([value,label])=>({value,label}))', {presetNames}).map(v=>({...v})), [
+    {value:'commercial-beauty',label:'A — 高级商业人像'}, {value:'golden-hour',label:'E — 户外黄金时刻'},
+  ]);
+  assert.equal(staticValue('Object.constructor("return window")()', {}), undefined);
+});
+
+test('copy handlers resolve templates at click time and preserve literal user input', () => {
+  let copied;
+  const scope = {character:'C:\\new\\test ${literal}', GenUI:{copy:dilFunction(([value])=>{copied=value;})}};
+  const handler = staticValue('()=>GenUI.copy(`CHARACTER:\\n${character}`)', scope);
+  assert.equal(copied, undefined);
+  callDil(handler, []);
+  assert.equal(copied, 'CHARACTER:\n'+scope.character);
+});
+
+test('scorecard sums scores, maps updates and joins its current report', () => {
+  const scope = {scores:[16,16,16,8,12,8,4],criteria:[{name:'结构',max:20},{name:'光照',max:20}]};
+  assert.equal(staticValue('scores.reduce((a,b)=>a+b,0)', scope), 80);
+  assert.equal(staticValue('[1,2,3].reduce((a,b)=>a+b)', scope), 6);
+  assert.equal(staticValue('[].reduce((a,b)=>a+b,0)', scope), 0);
+  assert.equal(staticValue('criteria.map((c,i)=>`${c.name}: ${scores[i]}/${c.max}`).join("\\n")+`\\n总分: ${total}/100`', {...scope,total:80}), '结构: 16/20\n光照: 16/20\n总分: 80/100');
+  assert.deepEqual(callDil(staticValue('p=>p.map((x,j)=>j===i?v:x)', {i:1,v:14}), [scope.scores]), [16,14,16,8,12,8,4]);
+  assert.equal(staticValue('[{}].join(" ")', {}), undefined);
+  assert.equal(staticValue('[1].reduce((a,b)=>b.constructor("window.xss=1")(),0)', {}), undefined);
+});

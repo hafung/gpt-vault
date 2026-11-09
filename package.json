@@ -19,7 +19,8 @@
     "dompurify": "^3.3.1",
     "katex": "^0.19.1",
     "lucide": "^0.468.0",
-    "marked": "^17.0.0"
+    "marked": "^17.0.0",
+    "mermaid": "^12.3.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

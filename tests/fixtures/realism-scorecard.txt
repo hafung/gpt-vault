@@ -1,0 +1,32 @@
+{@body const criteria=[{name:"人体、几何和透视",max:20,desc:"结构正确性、空间比例、遮挡关系"},{name:"光照与反射",max:20,desc:"光源逻辑、接触阴影、环境反射"},{name:"材料与微观纹理",max:20,desc:"各类材质的形态和光学特征"},{name:"相机与景深",max:10,desc:"摄影机位、对焦、清晰度和曝光"},{name:"场景与现实常识",max:15,desc:"物体功能、行为、背景细节"},{name:"色彩真实性",max:10,desc:"饱和度、色温和影调"},{name:"后期自然度",max:5,desc:"是否存在过度锐化、磨皮等问题"}]}
+{@body const [scores,setScores]=DIL.useState([16,16,16,8,12,8,4])}
+{@body const total=scores.reduce((a,b)=>a+b,0)}
+<box border radius="xl" padding={3} gap={3}>
+  <row align="center" justify="between">
+    <box gap=1>
+      <title size="lg">交互式真实感评分表</title>
+      <caption>每项拖动评分，快速查看图片在哪些方面不足。</caption>
+    </box>
+    <box align="end" gap=1>
+      <title size="2xl" color="default" tabularNums>{total}<text color="secondary" inline size="sm">/100</text></title>
+      <badge color={total>=90?"success":total>=75?"info":total>=60?"warning":"danger"}>{total>=90?"表现优秀":total>=75?"较为可信":total>=60?"需要优化":"优先修复"}</badge>
+    </box>
+  </row>
+  <box background="surface-tertiary" height="9px" radius="full" clip>
+    <box background={total>=90?"#16A34A":total>=75?"#3B82F6":total>=60?"#D97706":"#DC2626"} height="100%" width={`${total}%`} radius="full"/>
+  </box>
+  {#each criteria as c,i}
+    <box key={c.name} gap={1}>
+      <row align="center" justify="between">
+        <text weight="medium" size="sm">{c.name}</text>
+        <text color="secondary" tabularNums size="sm">{scores[i]} / {c.max}</text>
+      </row>
+      <slider min={0} max={c.max} step={1} value={scores[i]} onChange={v=>setScores(p=>p.map((x,j)=>j===i?v:x))}/>
+      <caption>{c.desc}</caption>
+    </box>
+  {/each}
+  <row justify="between" align="center">
+    <button color="secondary" variant="outline" size="md" onClick={()=>setScores([16,16,16,8,12,8,4])}><icon name="rotate-ccw" size="xs"/> 重置</button>
+    <button size="md" onClick={()=>GenUI.copy(criteria.map((c,i)=>`${c.name}: ${scores[i]}/${c.max}`).join("\n")+`\n总分: ${total}/100`)}><icon name="copy" size="xs"/> 复制评分</button>
+  </row>
+</box>

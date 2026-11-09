@@ -1,11 +1,12 @@
 import { marked } from 'marked';
+import { decorateMermaidDiagrams } from './mermaid';
 import DOMPurify from 'dompurify';
 import { staticValue, dilFunction, callDil, isDilFunction, type Scope } from './dil-values';
 import { markdownLiteralEnd, mapMarkdownText } from './math';
 import { renderFileLinks, type FileAssets } from './chatgpt-files';
 import { renderChatGPTMarkers } from './chatgpt-markers';
 import { renderChatGPTWriting } from './chatgpt-writing';
-import { createElement, Folder, FileCode } from 'lucide';
+import { createElement, Folder, FileCode, Copy, RotateCcw } from 'lucide';
 
 type Data = Record<string, unknown>;
 export interface ChatGPTUI {
@@ -16,7 +17,7 @@ export interface ChatGPTUI {
 }
 interface Element { name: string; attrs: string; children: Part[] }
 type Part = string | Element;
-const containers = new Set(['box', 'row', 'column', 'grid', 'grid-item', 'text', 'title', 'caption', 'badge', 'bold', 'italic', 'link', 'list', 'list-item', 'table', 'table-head', 'table-body', 'table-row', 'table-cell', 'button', 'form', 'radio-group', 'radio', 'checkbox', 'select', 'option', 'accordion', 'accordion-item', 'callout', 'card', 'tabs', 'tab', 'svg', 'g', 'appblock']);
+const containers = new Set(['box', 'row', 'column', 'grid', 'grid-item', 'text', 'title', 'caption', 'badge', 'bold', 'italic', 'link', 'list', 'list-item', 'table', 'table-head', 'table-body', 'table-row', 'table-cell', 'button', 'label', 'form', 'radio-group', 'radio', 'checkbox', 'select', 'option', 'accordion', 'accordion-item', 'callout', 'card', 'tabs', 'tab', 'svg', 'g', 'appblock']);
 const singles = new Set(['asyncimage', 'asyncimagegroup', 'entity', 'cite', 'memorycite', 'icon', 'divider', 'separator', 'image', 'slider', 'input', 'progress', 'chart', 'bar-chart', 'line-chart', 'pie-chart', 'map', 'rect', 'path', 'circle', 'ellipse', 'line', 'polyline', 'polygon']);
 const inline = new Set(['entity', 'cite', 'memorycite', 'icon', 'badge', 'bold', 'italic', 'link']);
 const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -98,7 +99,7 @@ function attributes(source: string, scope: Scope): Data {
     const start = i, c = source[i];
     if (c === '{') { const end = balancedEnd(source, i, false); if (end < 0) break; result[name] = staticValue(source.slice(i + 1, end - 1), scope); i = end; }
     else if (c === '"' || c === "'") { i++; while (i < source.length && source[i] !== c) { if (source[i] === '\\') i++; i++; } i++; result[name] = staticValue(source.slice(start, i), scope); }
-    else { while (i < source.length && !/\s/.test(source[i])) i++; result[name] = source.slice(start, i); }
+    else { while (i < source.length && !/\s/.test(source[i])) i++; const raw = source.slice(start, i); result[name] = /^-?\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : raw; }
   }
   return result;
 }
@@ -110,7 +111,7 @@ function dedent(source: string): string {
   return lines.map(line => line.slice(Math.min(amount, /^ */.exec(line)![0].length))).join('\n').trim();
 }
 
-interface DilRuntime { states: Record<string, unknown>; handlers: unknown[] }
+interface DilRuntime { states: Record<string, unknown>; handlers: unknown[]; copy?: (text: string) => void }
 export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = false, imageAssets: Record<string, string> = {}, fileAssets: FileAssets = {}, runtime?: DilRuntime): string {
   const original = body, groups: string[] = [];
   function imageFigure(item: Data, fallback = '回答中的图片'): string {
@@ -168,6 +169,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
   const scope = Object.assign(Object.create(null), dil?.appData?.opGenui?.modelDataBindings ?? {}) as Scope;
   const live: DilRuntime = runtime ?? { states: Object.create(null), handlers: [] };
   live.handlers = [];
+  scope.GenUI = { copy: dilFunction(([value]) => { if (typeof value === 'string') live.copy?.(value); }) };
   let stateIndex = 0;
   let limited = false, count = 0;
   function markdown(source: string, context: Scope, inlineOnly = false): string {
@@ -234,6 +236,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     }).join('');
   }
   function element(node: Element, context: Scope, depth: number): string {
+    if (depth > 40 || count > 5000) { limited = true; return '<p>内容较长，请查看原始内容。</p>'; }
     const a = attributes(node.attrs, context), name = node.name;
     if (name === 'svg') return vector([node], context, depth);
     if (name === 'body') {
@@ -281,7 +284,7 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     }
     const presentation = ` data-dil-presentation="${esc(JSON.stringify(Object.fromEntries(['color','weight','size','tabularNums'].filter(key=>a[key] !== undefined).map(key=>[key,a[key]]))))}"`;
     if (name === 'icon') {
-      const glyph = a.name === 'folder' ? Folder : a.name === 'file-code' ? FileCode : undefined;
+      const glyph = a.name === 'folder' ? Folder : a.name === 'file-code' ? FileCode : a.name === 'copy' ? Copy : a.name === 'rotate-ccw' ? RotateCcw : undefined;
       const svg = glyph ? createElement(glyph) : undefined;
       if (svg) { svg.setAttribute('width', '1em'); svg.setAttribute('height', '1em'); svg.setAttribute('stroke-width', '1.8'); }
       return `<span class="dil-icon" aria-hidden="true"${presentation}>${svg?.outerHTML ?? esc(({ 'arrow-down': '↓', 'arrow-right': '→', 'arrow-down-up': '↕', check: '✓', star: '★', zap: 'ϟ' } as Record<string, string>)[text(a.name)] ?? '◇')}</span>`;
@@ -293,6 +296,15 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
     const compactRow = name === 'row' && node.children.every(child => typeof child === 'string'
       ? marked.lexer(dedent(child)).every(token => token.type === 'paragraph' || token.type === 'space') && !/\n\s*\n/.test(child.trim())
       : inline.has(child.name) || child.name === 'text' || child.name === 'caption');
+    // Titles and explicitly inline text must share a line without Markdown
+    // paragraph wrappers splitting the heading around nested components.
+    const inlineTitle = name === 'title' && node.children.some(child => typeof child !== 'string' && child.name === 'text' && attributes(child.attrs, context).inline === true);
+    if (inlineTitle || name === 'text' && a.inline === true) {
+      const content = node.children.map(child => typeof child === 'string'
+        ? markdown(dedent(child), context, true)
+        : (count++, element(child, context, depth + 1))).join('');
+      return name === 'title' ? `<h3 class="dil-title"${presentation}>${content}</h3>` : `<span class="dil-text dil-inline"${presentation}>${content}</span>`;
+    }
     const content = compactRow ? node.children.map(child => {
       if (typeof child === 'string') return child.trim() ? `<span class="dil-row-copy">${markdown(dedent(child), context, true)}</span>` : '';
       count++;
@@ -320,7 +332,23 @@ export function renderMessageContent(body: string, ui?: ChatGPTUI, chatGPT = fal
       const min = finite(a.min, 0), max = Math.max(min, finite(a.max, 100));
       return `<input class="dil-slider" type="range" min="${min}" max="${max}" step="${Math.max(.0001, finite(a.step, 1))}" value="${Math.max(min, Math.min(max, finite(a.value, min)))}" aria-label="${label}"${binding}>`;
     }
-    if (name === 'button' || name === 'radio' || name === 'input' || name === 'select' || name === 'progress') {
+    if (name === 'label') return `<label class="dil-label">${inner}</label>`;
+    if (name === 'input' || name === 'select' || name === 'button') {
+      const handler = name === 'button' ? a.onClick : a.onChange;
+      const binding = ` data-dil-control="${live.handlers.push(isDilFunction(handler) ? handler : undefined) - 1}"`;
+      const disabled = a.disabled === true ? ' disabled' : '';
+      const label = a.label ? ` aria-label="${esc(a.label)}"` : '';
+      if (name === 'input') return `<input type="text" class="dil-input" value="${esc(a.value ?? a.defaultValue)}" placeholder="${esc(a.placeholder)}"${label}${binding}${disabled}>`;
+      if (name === 'button') return `<button type="button" class="dil-button${a.block ? ' dil-block' : ''}${a.variant === 'outline' ? ' dil-button-outline' : ''}"${label}${binding}${disabled}>${inner || esc(a.label || '按钮')}</button><span class="dil-copy-status" role="status" aria-live="polite"></span>`;
+      const options = Array.isArray(a.options) ? a.options.slice(0, 1000).map(value => {
+        const option = data(value), key = text(option.value ?? value), label = text(option.label ?? value);
+        return `<option value="${esc(key)}"${key === text(a.value) ? ' selected' : ''}>${esc(label)}</option>`;
+      }).join('') : content;
+      if (a.options !== undefined && !Array.isArray(a.options)) limited = true;
+      return `<select class="dil-select"${label}${binding}${disabled}>${options}</select>`;
+    }
+    if (name === 'option') return `<option value="${esc(a.value)}">${inner}</option>`;
+    if (name === 'radio' || name === 'progress') {
       limited = true;
       return `<div class="dil-static-control">${content || esc(a.label ?? a.placeholder ?? name)}${a.value !== undefined ? ` <span>${esc(a.value)}</span>` : ''}<small>存档快照</small></div>`;
     }
@@ -361,7 +389,9 @@ function updateDilDOM(target: Node, source: Node, childrenOnly = false, previous
     else updateDilDOM(old[i], next[i], false, previous?.childNodes[i]);
   }
 }
+let dilFieldId = 0;
 const hydratedDil = new WeakSet<HTMLElement>();
+const dilCompositionBound = new WeakSet<HTMLInputElement>();
 function decorateDilControls(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>('[data-dil-interactive]').forEach(response => {
     if (hydratedDil.has(response)) return;
@@ -372,7 +402,12 @@ function decorateDilControls(root: ParentNode): void {
     const render = () => renderMessageContent(config.body, config.ui, config.chatGPT, config.imageAssets, config.fileAssets, runtime);
     const initial = document.createElement('template'); initial.innerHTML = render();
     let previous = initial.content.querySelector('.dil-response')!;
-    const bind = () => response.querySelectorAll<HTMLInputElement>('input[data-dil-control]').forEach(input => {
+    const bind = () => response.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('[data-dil-control]').forEach(input => {
+      const fieldLabel = input.parentElement?.querySelector<HTMLLabelElement>(':scope > .dil-label');
+      if (fieldLabel) {
+        if (!input.id) input.id = `dil-field-${++dilFieldId}`;
+        fieldLabel.htmlFor = input.id;
+      }
       if (input.type === 'range' && input.getAttribute('aria-label') === '调整数值') {
         const label = input.parentElement?.querySelector('.dil-row .dil-text')?.textContent?.trim();
         if (label) input.setAttribute('aria-label', label);
@@ -380,7 +415,16 @@ function decorateDilControls(root: ParentNode): void {
       const change = () => {
         const handler = runtime.handlers[Number(input.dataset.dilControl)];
         if (!isDilFunction(handler)) return;
-        callDil(handler, [input.type === 'checkbox' ? input.checked : Number(input.value)]);
+        let copied: string | undefined;
+        runtime.copy = value => { copied = value; };
+        try { callDil(handler, input instanceof HTMLButtonElement ? [] : [input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value]); }
+        finally { runtime.copy = undefined; }
+        if (copied !== undefined && input instanceof HTMLButtonElement) {
+          const status = input.nextElementSibling as HTMLElement;
+          status.textContent = '';
+          navigator.clipboard.writeText(copied).then(() => { status.textContent = '已复制'; }).catch(() => { status.textContent = '复制失败，请重试'; });
+          setTimeout(() => { status.textContent = ''; }, 2500);
+        }
         const template = document.createElement('template'); template.innerHTML = render();
         const next = template.content.querySelector('.dil-response');
         if (!next) return;
@@ -388,13 +432,22 @@ function decorateDilControls(root: ParentNode): void {
         updateDilDOM(response, next, true, previous); previous = next;
         decorateMessageImages(response); bind();
       };
-      if (input.type === 'range') input.oninput = change; else input.onchange = change;
+      if (input instanceof HTMLButtonElement) input.onclick = change;
+      else if (input instanceof HTMLInputElement && input.type !== 'checkbox') {
+        input.oninput = event => { if (!(event as InputEvent).isComposing) change(); };
+        if (!dilCompositionBound.has(input)) {
+          dilCompositionBound.add(input);
+          input.addEventListener('compositionend', () => input.dispatchEvent(new Event('input', {bubbles: true})));
+        }
+      }
+      else input.onchange = change;
     });
     bind();
   });
 }
 
 export function decorateMessageImages(root: ParentNode): void {
+  decorateMermaidDiagrams(root);
   decorateDilControls(root);
   root.querySelectorAll<HTMLElement>('.dil-local-image').forEach(node => {
     const id = node.dataset.assetId;
@@ -433,9 +486,9 @@ export function decorateMessageImages(root: ParentNode): void {
     if(a.height!==undefined) { node.style.flexShrink='0'; if(!node.textContent?.trim())node.style.minHeight='0'; }
     if(a.color==='secondary')node.style.color='var(--muted)';
     if(/^#[\da-f]{3,8}$/i.test(text(a.color)))node.style.color=text(a.color);
-    if(a.color==='success')node.classList.add('dil-success');
+    if(['success','info','warning','danger'].includes(text(a.color)))node.classList.add('dil-'+a.color);
     const size=({'2xs':'.75em',xs:'.85em',sm:'.93em',lg:'1.2em',xl:'1.5em','2xl':'1.85em'} as Record<string,string>)[text(a.size)];
-    if(size)node.style.fontSize=size;
+    if(size)node.style.fontSize=node.classList.contains('dil-inline') ? `calc(var(--read-size) * ${parseFloat(size)})` : size;
     if(a.weight==='medium')node.style.fontWeight='600';
     if(a.tabularNums===true)node.style.fontVariantNumeric='tabular-nums';
   });
