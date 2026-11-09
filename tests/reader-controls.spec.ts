@@ -96,3 +96,59 @@ for (const count of [8, 95]) {
     }
   });
 }
+
+
+test('fullscreen isolates the reader and keeps controls through pagination and browser exit', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openReader(page, 95);
+  const reader = page.locator('.reader');
+  const normalWidth = (await reader.boundingBox())!.width;
+  await page.locator('#message-scroll').evaluate(el => { el.style.scrollBehavior = 'auto'; el.scrollTop = 500; });
+  const position = await page.locator('#message-scroll').evaluate(el => el.scrollTop);
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className)).toBe('reader');
+  await expect(page.getByRole('button', { name: '退出全屏', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.locator('#message-scroll').evaluate(el => el.scrollTop)).toBe(position);
+  const bounds = (await reader.boundingBox())!;
+  expect(bounds.x).toBe(0);
+  expect(bounds.y).toBe(0);
+  expect(bounds.width).toBe(await page.evaluate(() => innerWidth));
+  expect(bounds.height).toBe(await page.evaluate(() => innerHeight));
+  await page.getByRole('button', { name: '放大字号', exact: true }).click();
+  await expect(page.locator('html')).toHaveCSS('--read-size', '16px');
+  await page.locator('#go-end').click();
+  await expectEnd(page, 95);
+  await expect(page.getByRole('button', { name: '退出全屏', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.screenshot({ path: 'artifacts/reader-fullscreen.png' });
+  // Browser Esc exits fullscreen without necessarily dispatching a page keydown.
+  await page.evaluate(() => document.exitFullscreen());
+  await expect(page.getByRole('button', { name: '全屏阅读', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => (await reader.boundingBox())!.width).toBe(normalWidth);
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click();
+  await page.getByRole('button', { name: '退出全屏', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+});
+
+test('immersive fallback supports mobile, Escape, and returning to the list', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, 'fullscreenEnabled', { value: true });
+    Element.prototype.requestFullscreen = async () => { throw new Error('Fullscreen unavailable'); };
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openReader(page, 8);
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click();
+  await expect(page.locator('.reader')).toHaveClass(/reader-immersive/);
+  expect(await page.locator('.reader').boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+  await page.locator('#session-search').click();
+  await expect(page.locator('#local-query')).toBeFocused();
+  await page.locator('#close-local-search').click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: '全屏阅读', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click();
+  await page.getByRole('button', { name: '退出全屏', exact: true }).click();
+  await expect(page.locator('.reader')).not.toHaveClass(/reader-immersive/);
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click();
+  await page.getByRole('button', { name: '返回对话列表', exact: true }).click();
+  await expect(page.locator('.reader')).not.toHaveClass(/reader-immersive/);
+  await expect(page.locator('.conversation-pane')).toBeVisible();
+});

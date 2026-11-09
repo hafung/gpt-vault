@@ -210,3 +210,8 @@ body:has(#sources-dialog[open]) .backup-activity{display:none}
 .mermaid-status{display:block;padding:7px 12px;font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
 .mermaid-status:empty{display:none}.mermaid-block.diagram-search-hit{box-shadow:0 0 0 2px var(--green)}
 @media(max-width:680px){.mermaid-toolbar{padding:8px;gap:2px}.mermaid-toolbar button{padding:5px 6px}.mermaid-preview{padding:14px 8px}}
+
+/* Keep the same reader mounted so fullscreen preserves the reading position. */
+.reader:fullscreen,.reader.reader-immersive{display:flex;position:fixed;inset:0;width:100%;height:100dvh;min-height:0;z-index:30;overflow:hidden;background:var(--panel)}
+#reader-fullscreen{margin-left:6px}
+#reader-fullscreen[aria-pressed=true]{background:var(--green-soft);color:var(--green)}

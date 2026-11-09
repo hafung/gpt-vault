@@ -1,12 +1,12 @@
 import './style.css';
-import { createElement, Search, Folder, MessagesSquare, Star, RefreshCw, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, X, Check, Download, Copy, SlidersHorizontal, Database, ShieldCheck, Terminal, PanelLeft, Moon, Sun, ArrowDown, ArrowUp, ArrowDownToLine, ArrowUpToLine, MoreHorizontal, FileText, Upload, CircleHelp, Monitor, Command, BookOpen, LoaderCircle, Vault, TextSearch, Layers, CheckCircle2, EyeOff, Eye, Trash2 } from 'lucide';
+import { createElement, Search, Folder, MessagesSquare, Star, RefreshCw, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, X, Check, Download, Copy, SlidersHorizontal, Database, ShieldCheck, Terminal, PanelLeft, Moon, Sun, ArrowDown, ArrowUp, ArrowDownToLine, ArrowUpToLine, MoreHorizontal, FileText, Upload, CircleHelp, Monitor, Command, BookOpen, LoaderCircle, Vault, TextSearch, Layers, CheckCircle2, EyeOff, Eye, Trash2, Maximize, Minimize } from 'lucide';
 import { marked } from 'marked';
 import { localPathTarget, barePathPattern } from './local-paths';
 import { renderMessageContent, decorateMessageImages, type ChatGPTUI } from './message-content';
 import type { FileAssets } from './chatgpt-files';
 
 type Node = Parameters<typeof createElement>[0];
-const icons: Record<string, Node> = { Search, Folder, MessagesSquare, Star, RefreshCw, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, X, Check, Download, Copy, SlidersHorizontal, Database, ShieldCheck, Terminal, PanelLeft, Moon, Sun, ArrowDown, ArrowUp, ArrowDownToLine, ArrowUpToLine, MoreHorizontal, FileText, Upload, CircleHelp, Monitor, Command, BookOpen, LoaderCircle, Vault, TextSearch, Layers, CheckCircle2, EyeOff, Eye, Trash2 };
+const icons: Record<string, Node> = { Search, Folder, MessagesSquare, Star, RefreshCw, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, X, Check, Download, Copy, SlidersHorizontal, Database, ShieldCheck, Terminal, PanelLeft, Moon, Sun, ArrowDown, ArrowUp, ArrowDownToLine, ArrowUpToLine, MoreHorizontal, FileText, Upload, CircleHelp, Monitor, Command, BookOpen, LoaderCircle, Vault, TextSearch, Layers, CheckCircle2, EyeOff, Eye, Trash2, Maximize, Minimize };
 function icon(name: string, cls = '') { const svg = createElement(icons[name] || FileText); svg.setAttribute('class', 'icon ' + cls); svg.setAttribute('aria-hidden', 'true'); return svg.outerHTML; }
 function esc(value: unknown) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!); }
 function $(selector: string, root: ParentNode = document) { return root.querySelector<HTMLElement>(selector)!; }
@@ -91,6 +91,7 @@ $('#app').innerHTML = `
   <div id="toast" class="toast" role="status" aria-live="polite"></div>`;
 
 function welcome() {
+  void exitReaderFullscreen();
   const s = state.stats;
   $('#reader-content').innerHTML = `<div class="welcome"><div class="welcome-top"><span class="eyebrow">YOUR LOCAL CONVERSATION ARCHIVE</span><button id="help-button" class="icon-button" aria-label="键盘快捷键" title="键盘快捷键">${icon('CircleHelp')}</button></div><div class="vault-art" aria-hidden="true"><div class="orbit orbit-1"></div><div class="orbit orbit-2"></div><div class="orbit orbit-3"></div><div class="art-center"><span class="brand-mark">${icon('Vault')}</span></div><span class="art-dot dot-1"></span><span class="art-dot dot-2"></span><span class="art-line line-1"></span><span class="art-line line-2"></span><span class="art-label label-1">CHATGPT</span><span class="art-label label-2">CODEX</span></div><span class="welcome-kicker">CHATGPT · CODEX · 本地归档</span><h2>你的 AI 对话，<br>存入自己的<span>档案。</span></h2><p>集中收录 ChatGPT 与 Codex 对话。<br>本地搜索、阅读与备份，随时找回聊过的内容。</p><div class="welcome-stats"><div><b>${num(s?.sessions || 0)}</b><span>段对话</span></div><div><b>${num(s?.projects || 0)}</b><span>个项目空间</span></div><div><b>${num(s?.messages || 0)}</b><span>条记忆</span></div></div><div class="welcome-hint">${icon('ChevronLeft')} 选择一段对话，继续那时的思考 <span>或按 <kbd>Ctrl K</kbd> 搜索</span></div><div class="welcome-bottom"><span><i></i> 全部保存在你的设备上</span><span>LOCAL. SEARCHABLE. YOURS.</span></div></div>`;
   $('#help-button').onclick = () => (document.querySelector('#help-dialog') as HTMLDialogElement).showModal();
@@ -327,7 +328,7 @@ function renderReader(page: Page, around?: number) {
   const partial = !!s.metadata?.cache_partial || !!s.metadata?.desktop_missing_bodies;
   $('#reader-content').innerHTML = `<header class="reader-header"><div class="reader-heading-top"><div class="reader-breadcrumb"><button id="back-list" class="icon-button" aria-label="返回对话列表">${icon('ChevronLeft')}</button><span>${icon('Folder')}${esc(s.project)}</span><i>/</i><span>${esc(s.provider)}<em>${esc(s.platform)}</em></span></div><div class="reader-actions">${s.provider === 'ChatGPT' && s.platform === 'Windows' && s.metadata?.desktop_cache ? `<button id="session-sync" class="icon-button" title="重新同步当前对话" aria-label="重新同步当前对话">${icon('RefreshCw')}</button>` : ''}<button id="session-visibility" class="icon-button" title="${s.hidden ? '恢复对话' : '隐藏对话'}" aria-label="${s.hidden ? '恢复对话' : '隐藏对话'}">${icon(s.hidden ? 'Eye' : 'EyeOff')}</button><button id="session-delete" class="icon-button delete-session-button" title="删除对话" aria-label="删除对话">${icon('Trash2')}</button><button id="session-favorite" class="icon-button ${s.favorite ? 'is-favorite' : ''}" title="${s.favorite ? '取消收藏' : '收藏对话'}" aria-label="${s.favorite ? '取消收藏' : '收藏对话'}">${icon('Star',s.favorite ? 'filled' : '')}</button><button id="session-search" class="icon-button" title="搜索当前对话" aria-label="搜索当前对话" aria-controls="local-search" aria-expanded="${state.localSearchOpen}">${icon('Search')}</button><details class="export-menu"><summary class="icon-button" title="导出对话" aria-label="导出对话">${icon('Download')}</summary><div class="export-popover"><a href="/api/sessions/${encodeURIComponent(s.id)}/export?format=md" download>${icon('FileText')}导出 Markdown</a><a href="/api/sessions/${encodeURIComponent(s.id)}/export?format=json" download>${icon('Database')}导出 JSON</a><a href="/api/sessions/${encodeURIComponent(s.id)}/export?format=raw" download>${icon('Terminal')}导出原始事件</a></div></details><button id="session-info" class="icon-button" title="对话详情" aria-label="对话详情">${icon('MoreHorizontal')}</button></div></div><h2>${esc(s.title)}</h2><div class="reader-meta"><span>${icon('MessagesSquare')}${num(s.message_count)} 条消息</span><i>·</i><span>${date(s.created,true)}</span>${s.model ? `<i>·</i><span class="model-name">${esc(s.model)}</span>` : ''}${s.hidden ? '<span class="phase-tag">已隐藏 / 归档</span>' : ''}${s.project_hidden ? '<span class="phase-tag">项目已隐藏</span>' : ''}${s.parent_id ? '<span class="phase-tag">子代理会话</span>' : ''}</div><div id="session-sync-feedback" class="session-sync-feedback" role="status" hidden></div><button id="session-repair" class="button" hidden>恢复补全连接并同步</button></header>
   <div id="local-search" class="local-search" ${state.localSearchOpen ? '' : 'hidden'}>${icon('TextSearch')}<input id="local-query" aria-label="搜索当前对话" placeholder="在这段对话中查找…" value="${esc(state.localQuery)}"><span id="hit-count"></span><button id="prev-hit" class="icon-button" title="上一个匹配" aria-label="上一个匹配">${icon('ChevronLeft')}</button><button id="next-hit" class="icon-button" title="下一个匹配" aria-label="下一个匹配">${icon('ChevronRight')}</button><button id="close-local-search" class="icon-button" aria-label="关闭对话搜索">${icon('X')}</button></div>
-  <div class="reading-toolbar"><label class="checkbox"><input id="show-all" type="checkbox" ${state.all ? 'checked' : ''}>${icon('Layers')} 展示工具与上下文</label><div><button id="font-smaller" class="text-size" title="缩小字号" aria-label="缩小字号">A−</button><button id="font-larger" class="text-size" title="放大字号" aria-label="放大字号">A+</button></div></div>
+  <div class="reading-toolbar"><label class="checkbox"><input id="show-all" type="checkbox" ${state.all ? 'checked' : ''}>${icon('Layers')} 展示工具与上下文</label><div><button id="font-smaller" class="text-size" title="缩小字号" aria-label="缩小字号">A−</button><button id="font-larger" class="text-size" title="放大字号" aria-label="放大字号">A+</button><button id="reader-fullscreen" class="icon-button" type="button" title="全屏阅读" aria-label="全屏阅读" aria-pressed="false" aria-controls="reader-content">${icon('Maximize')}</button></div></div>
   <div class="reader-body"><div id="message-scroll" class="message-scroll"><div id="messages" class="messages">${offset ? `<button id="previous-messages" class="message-page-button">${icon('ArrowUp')} 查看前面的消息 <span>还有 ${num(offset)} 条</span></button>` : `<div class="conversation-start"><span>${partial ? '已收录内容从这里开始 · 历史待补全' : '对话开始'}</span></div>`}${page.items.map(renderMessage).join('') || '<div class="empty-list"><p>此会话尚无可展示的正文。可开启工具与上下文，或导出原始记录。</p></div>'}${page.more ? `<button id="next-messages" class="message-page-button">${icon('ArrowDown')} 继续阅读 <span>还有 ${num(page.total-end)} 条</span></button>` : '<div class="conversation-end"><span>'+(partial ? '已保存当前可读取内容 · 仍有历史待补全' : '这段记忆，已妥善保存。')+'</span>'+icon('ShieldCheck')+'</div>'}</div></div><nav class="reader-navigation" aria-label="对话位置"><button id="go-start" class="reader-jump" title="回到开头" aria-label="回到开头" aria-controls="message-scroll">${icon('ArrowUpToLine')}</button><button id="go-end" class="reader-jump" title="前往末尾" aria-label="前往末尾" aria-controls="message-scroll">${icon('ArrowDownToLine')}</button></nav></div><div class="reader-footer"><span>${num(offset+1)} – ${num(end)} / ${num(page.total)} 条<span class="footer-faint"> · 按需加载</span></span><span>只读档案 ${icon('ShieldCheck')}</span></div>`;
   bindReader(); renderSessionSyncStatus(); decorateProse();
   if (around) requestAnimationFrame(() => { const target = $('#message-' + around); if (target) { target.classList.add('hit-message'); target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.querySelector('details')?.setAttribute('open',''); } });
@@ -379,12 +380,44 @@ function bindReader() {
   $('#prev-hit').onclick = () => stepHit(-1); $('#next-hit').onclick = () => stepHit(1);
   $('#session-info').onclick = sessionInfo;
   input('#show-all').onchange = () => { state.all = input('#show-all').checked; input('#search-all').checked = state.all; readerCache.clear(); openSession(state.id); if(state.q)loadList(); };
+  syncReaderFullscreen();
+  $('#reader-fullscreen').onclick = () => toggleReaderFullscreen();
   $('#font-smaller').onclick = () => adjustFont(-1); $('#font-larger').onclick = () => adjustFont(1);
   if ($('#previous-messages')) $('#previous-messages').onclick = () => openSession(state.id, undefined, false, Math.max(0,state.page!.offset-30),'previous');
   if ($('#next-messages')) $('#next-messages').onclick = () => openSession(state.id, undefined, false, state.page!.offset+state.page!.items.length,'next');
   $('#go-start').onclick = () => openSession(state.id,undefined,false,0,'start');
   $('#go-end').onclick = () => openSession(state.id,undefined,false,Math.max(0,state.page!.total-30),'end');
 }
+function isReaderFullscreen() {
+  const reader = $('.reader');
+  return document.fullscreenElement === reader || reader.classList.contains('reader-immersive');
+}
+function syncReaderFullscreen() {
+  const button = $('#reader-fullscreen');
+  if (!button) return;
+  const active = isReaderFullscreen();
+  button.innerHTML = icon(active ? 'Minimize' : 'Maximize');
+  button.title = active ? '退出全屏（Esc）' : '全屏阅读';
+  button.setAttribute('aria-label', active ? '退出全屏' : '全屏阅读');
+  button.setAttribute('aria-pressed', String(active));
+}
+async function exitReaderFullscreen() {
+  $('.reader').classList.remove('reader-immersive');
+  if (document.fullscreenElement === $('.reader')) {
+    try { await document.exitFullscreen(); } catch (error) { handle(error); }
+  }
+  syncReaderFullscreen();
+}
+async function toggleReaderFullscreen() {
+  if (isReaderFullscreen()) { await exitReaderFullscreen(); return; }
+  const reader = $('.reader');
+  if (document.fullscreenEnabled && reader.requestFullscreen) {
+    try { await reader.requestFullscreen(); syncReaderFullscreen(); return; } catch { /* Use the page viewport when browser fullscreen is unavailable. */ }
+  }
+  reader.classList.add('reader-immersive');
+  syncReaderFullscreen();
+}
+document.addEventListener('fullscreenchange', syncReaderFullscreen);
 function adjustFont(delta: number) { const value = Math.max(12,Math.min(20,Number(localStorage.getItem('echo-font')||15)+delta)); localStorage.setItem('echo-font',String(value)); document.documentElement.style.setProperty('--read-size',value+'px'); }
 let favoriteBusy = false;
 async function favorite() { if(!state.session || favoriteBusy)return; favoriteBusy = true; const savingButton = $('#session-favorite') as HTMLButtonElement; savingButton.disabled = true; try { const value = !state.session.favorite; await post('/sessions/'+encodeURIComponent(state.id)+'/favorite',{favorite:value}); state.session.favorite = Number(value); readerCache.clear(); const button = $('#session-favorite'); button.innerHTML = icon('Star',value?'filled':''); button.classList.toggle('is-favorite',value); button.setAttribute('aria-label',value?'取消收藏':'收藏对话'); button.title = value?'取消收藏':'收藏对话'; toast(value?'已加入收藏':'已取消收藏'); await refreshStats(); await loadList(); } catch(error){handle(error);} finally { favoriteBusy = false; if($('#session-favorite')) ($('#session-favorite') as HTMLButtonElement).disabled = false; } }
@@ -790,7 +823,7 @@ document.addEventListener('keydown',e=>{
   const editing=(e.target as HTMLElement).matches('input,textarea,select,[contenteditable]');
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();input('#global-search').focus();input('#global-search').select();}
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'&&state.session){e.preventDefault();showLocalSearch();}
-  if(e.key==='Escape'&&!document.querySelector('dialog[open]')){closeSidebar();if($('#local-search')&&!$('#local-search').hidden){closeLocalSearch();}else if(state.q){state.q='';input('#global-search').value='';saveUrl();loadList();}}
+  if(e.key==='Escape'&&!document.querySelector('dialog[open]')){if(isReaderFullscreen()){e.preventDefault();void exitReaderFullscreen();return;}closeSidebar();if($('#local-search')&&!$('#local-search').hidden){closeLocalSearch();}else if(state.q){state.q='';input('#global-search').value='';saveUrl();loadList();}}
   if(!editing&&!document.querySelector('dialog[open]')&&['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();const index=state.items.findIndex(s=>s.id===state.id);const next=Math.max(0,Math.min(state.items.length-1,index+(e.key==='ArrowDown'?1:-1)));if(state.items[next]){openSession(state.items[next].id,undefined,true);document.querySelector<HTMLElement>(`.conversation-card[data-id="${CSS.escape(state.items[next].id)}"]`)?.scrollIntoView({block:'nearest'});}}
 });
 window.onpopstate=()=>{const next=new URL(location.href);state.q=next.searchParams.get('q')||'';state.project=next.searchParams.get('project')||'';state.favorite=next.searchParams.get('favorite')==='1';state.platform=next.searchParams.get('platform')||'';state.showHidden=next.searchParams.get('hidden')==='1';renderVisibilityToggle();refreshStats().catch(handle);input('#global-search').value=state.q;updateNav();loadList();const id=next.searchParams.get('session');if(id)openSession(id);else{state.id='';state.session=null;welcome();document.body.classList.remove('reading');}};
