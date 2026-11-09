@@ -826,6 +826,37 @@ test('archived Mermaid flowcharts and sequence diagrams render locally, switch s
   expect(external).toEqual([]);
 });
 
+for (const width of [1440, 390]) test(`Mermaid never overflows the page during first entry or reload at ${width}px`, async ({page}) => {
+  await page.setViewportSize({width, height:900});
+  await page.addInitScript(() => {
+    const overflows: {width:number; height:number}[] = [];
+    Object.assign(window, {diagramPageOverflows:overflows});
+    const sample = () => {
+      if (!document.querySelector('#message-scroll')) return;
+      const root = document.documentElement;
+      if (root.scrollHeight > innerHeight || root.scrollWidth > innerWidth) {
+        overflows.push({width:root.scrollWidth, height:root.scrollHeight});
+      }
+    };
+    new MutationObserver(sample).observe(document, {childList:true, subtree:true});
+    const frame = () => { sample(); requestAnimationFrame(frame); };
+    requestAnimationFrame(frame);
+  });
+  const graphs = await readFile(resolve('tests/fixtures/project-review-mermaid.md'), 'utf8');
+  await fixture(page, graphs);
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    const images = page.locator('.mermaid-preview img');
+    await expect(images).toHaveCount(4, {timeout:20000});
+    await expect.poll(() => images.evaluateAll(nodes => nodes.every(node => (node as HTMLImageElement).naturalWidth > 0))).toBeTruthy();
+    // Let the final image's layout reach a painted frame before checking samples.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await page.evaluate(() => (window as unknown as {diagramPageOverflows:unknown[]}).diagramPageOverflows)).toEqual([]);
+    await expect(page.locator('.mermaid-render-host')).toHaveCount(0);
+    expect(await page.locator('#message-scroll').evaluate(el => el.scrollHeight > el.clientHeight)).toBeTruthy();
+  }
+});
+
 test('invalid Mermaid keeps exact source and hostile directives cannot enable archived scripts or links', async ({page}) => {
   await page.addInitScript(() => { Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as unknown as {copied:string}).copied=text;}}}); });
   const invalid='flowchart TD\n  A["unfinished';

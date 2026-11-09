@@ -35,8 +35,17 @@ function renderDiagram(source: string, dark: boolean): Promise<string> {
       flowchart: { htmlLabels: false, curve: 'basis', padding: 18, wrappingWidth: 280 },
       sequence: { useMaxWidth: true, wrap: true },
     });
-    const { svg } = await mermaid.render(`vault-diagram-${++nextId}`, source);
-    return DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'image', 'a', 'script'] });
+    // Mermaid needs attached, measurable SVG nodes. Its default body container
+    // expands the document while drawing, briefly showing the page scrollbar.
+    const host = document.createElement('div');
+    host.className = 'mermaid-render-host'; host.setAttribute('aria-hidden', 'true');
+    document.body.append(host);
+    try {
+      const { svg } = await mermaid.render(`vault-diagram-${++nextId}`, source, host);
+      return DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'image', 'a', 'script'] });
+    } finally {
+      host.remove();
+    }
   });
   queue = task;
   cache.set(key, task);

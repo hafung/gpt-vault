@@ -198,6 +198,7 @@ body:has(#sources-dialog[open]) .backup-activity{display:none}
 .dil-box:has(> .dil-title > .dil-inline)>.dil-badge{font-size:.8em;line-height:1.6;border-radius:999px;padding:1px 7px}
 
 /* Mermaid previews load locally on demand; ordinary code blocks stay literal. */
+.mermaid-render-host{position:fixed;inset:0;visibility:hidden;pointer-events:none;overflow:hidden;contain:strict}
 .mermaid-block{min-width:0;max-width:100%;margin:18px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
 .mermaid-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--hover);font-size:11px;line-height:1.5}
 .mermaid-kind{margin-right:auto;color:var(--secondary);font-weight:600}
